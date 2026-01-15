@@ -1,0 +1,17 @@
+fastapi
+uvicorn
+sqlalchemy[asyncio]
+asyncpg
+pgvector
+oss2
+pymupdf
+sentence-transformers
+python-multipart
+python-jose[cryptography]
+passlib[bcrypt]
+python-dotenv
+pandas
+tabulate
+openai
+httpx
+pydantic-settings
