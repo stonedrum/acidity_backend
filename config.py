@@ -16,9 +16,13 @@ class Settings(BaseSettings):
     OSS_ENDPOINT: str = "oss-cn-hangzhou.aliyuncs.com"
     
     # Models
-    VECTOR_MODEL_NAME: str = "shibing624/text2vec-base-chinese"
+    # 模型路径：如果是本地路径（以 / 或 ./ 开头），则直接使用；否则为 HuggingFace 模型名称
+    # 默认情况下，sentence-transformers 会将模型缓存在 ~/.cache/huggingface/hub/
+    VECTOR_MODEL_NAME: str = "shibing624/text2vec-base-chinese"  # 或本地路径，如 "/path/to/models/text2vec-base-chinese"
+    VECTOR_MODEL_PATH: str = ""  # 自定义向量模型路径，如果设置则优先使用此路径
     VECTOR_DIMENSION: int = 768
-    RERANK_MODEL_NAME: str = "BAAI/bge-reranker-large"
+    RERANK_MODEL_NAME: str = "BAAI/bge-reranker-large"  # 或本地路径，如 "/path/to/models/bge-reranker-large"
+    RERANK_MODEL_PATH: str = ""  # 自定义重排模型路径，如果设置则优先使用此路径
     
     # LLM (Aliyun DashScope / OpenAI compatible)
     LLM_API_KEY: str = ""

@@ -1,6 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Float
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Float, Boolean, Integer
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 from .config import settings
@@ -16,8 +16,9 @@ class User(Base):
 class Document(Base):
     __tablename__ = "documents"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    filename = Column(String)
+    filename = Column(String, unique=True, index=True)  # 文件名唯一
     oss_key = Column(String)
+    uploader = Column(String)  # 上传用户名
     upload_time = Column(DateTime, default=datetime.utcnow)
 
 class Clause(Base):
@@ -27,3 +28,32 @@ class Clause(Base):
     chapter_path = Column(String) # e.g. "第一章 > 第1.1节"
     content = Column(Text) # Markdown content
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
+    is_verified = Column(Boolean, default=False)  # 是否已校验
+
+class ApiCallLog(Base):
+    """接口调用日志表"""
+    __tablename__ = "api_call_logs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    call_time = Column(DateTime, default=datetime.utcnow, index=True)  # 调用时间
+    username = Column(String, index=True)  # 用户名
+    api_name = Column(String, index=True)  # 接口名称，如 "/chat", "/upload", "/search"
+    method = Column(String)  # HTTP方法，如 "POST", "GET"
+    parameters = Column(JSONB)  # 请求参数（JSON格式）
+    response_status = Column(Integer)  # 响应状态码
+    response_time_ms = Column(Float)  # 响应时间（毫秒）
+
+class ChatQueryLog(Base):
+    """Chat查询记录表"""
+    __tablename__ = "chat_query_logs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    query_time = Column(DateTime, default=datetime.utcnow, index=True)  # 查询时间
+    username = Column(String, index=True)  # 用户名
+    query_content = Column(Text)  # 查询内容
+    # 第一次从RAG数据库返回的记录（向量匹配的Top 10）
+    initial_rag_results = Column(JSONB)  # 格式: [{"clause_id": "...", "chapter_path": "...", "content": "...", "score": 0.5}, ...]
+    # 第二次重排后的信息（Top 3）
+    reranked_results = Column(JSONB)  # 格式: [{"clause_id": "...", "chapter_path": "...", "content": "...", "rerank_score": 0.8}, ...]
+    # 最终从大模型返回的内容
+    llm_response = Column(Text)  # LLM返回的完整内容
+    model_name = Column(String)  # 调用的模型名称
+    query_duration_seconds = Column(Float)  # 查询所花时间（秒）
