@@ -9,8 +9,8 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from .database import get_db, init_db
-from .models import User, Document, Clause, ApiCallLog, ChatQueryLog
-from .schemas import UserCreate, UserLogin, Token, DocumentOut, SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs, LogQueryParams
+from .models import User, Document, Clause, ApiCallLog, ChatQueryLog, Prompt
+from .schemas import UserCreate, UserLogin, Token, DocumentOut, SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs, LogQueryParams, PromptOut, PromptCreate, PromptUpdate
 from .auth import get_password_hash, verify_password, create_access_token, get_current_user
 from .services.oss_service import oss_service
 from .services.pdf_service import pdf_service
@@ -23,11 +23,48 @@ from starlette.requests import Request
 from starlette.responses import Response
 import shutil
 import uuid
+from uuid import UUID
 import time
 import json
-from typing import Optional
+from datetime import datetime
+from typing import Optional, List
 
 app = FastAPI(title="Standard Knowledge Base RAG")
+
+@app.on_event("startup")
+async def startup_event():
+    await init_db()
+    # 初始化默认提示词
+    from .database import AsyncSessionLocal
+    async with AsyncSessionLocal() as db:
+        # 检查是否存在 rag_system_prompt
+        stmt = select(Prompt).where(Prompt.name == "rag_system_prompt")
+        result = await db.execute(stmt)
+        if not result.scalar_one_or_none():
+            default_prompt = """你是市政设施运维专家，精通结构健康监测、病害诊断、养护修复、应急处置及行业规范。请基于市政设施全生命周期运维经验，用专业、简洁的语言解答道桥隧巡检、维修、管理相关问题。
+将根据提供的【参考资料】来回答用户的问题。如果资料中没有相关信息，请诚实说明。
+你的回答应体现市政设施运维专家的身份：逻辑清晰、术语规范、强调安全与合规。
+
+重要提示：请不要在回答中包含引用文件、参考文献或链接信息，这些信息将由系统自动添加。
+
+【参考资料】
+{context}
+"""
+            new_prompt = Prompt(
+                name="rag_system_prompt",
+                template=default_prompt,
+                description="RAG 系统的核心提示词模板"
+            )
+            db.add(new_prompt)
+            await db.commit()
+            print("[INFO] 已初始化默认提示词：rag_system_prompt")
+
+async def get_prompt(db: AsyncSession, name: str, default_template: str = None) -> str:
+    """从数据库获取提示词"""
+    stmt = select(Prompt).where(Prompt.name == name, Prompt.is_active == True)
+    result = await db.execute(stmt)
+    prompt_obj = result.scalar_one_or_none()
+    return prompt_obj.template if prompt_obj else default_template
 
 app.add_middleware(
     CORSMiddleware,
@@ -234,7 +271,8 @@ async def chat(
             reference_links += f"- [{doc.filename}]({file_url})\n"
     
     # 2. Prepare Prompt
-    system_prompt = f"""你你是市政设施运维专家，精通结构健康监测、病害诊断、养护修复、应急处置及行业规范。请基于市政设施全生命周期运维经验，用专业、简洁的语言解答道桥隧巡检、维修、管理相关问题。
+    # 从数据库获取提示词模板，如果不存在则使用默认值
+    default_system_template = """你是市政设施运维专家，精通结构健康监测、病害诊断、养护修复、应急处置及行业规范。请基于市政设施全生命周期运维经验，用专业、简洁的语言解答道桥隧巡检、维修、管理相关问题。
     将根据提供的【参考资料】来回答用户的问题。如果资料中没有相关信息，请诚实说明。
     你的回答应体现市政设施运维专家的身份：逻辑清晰、术语规范、强调安全与合规。
 
@@ -243,6 +281,8 @@ async def chat(
     【参考资料】
     {context}
 """
+    prompt_template = await get_prompt(db, "rag_system_prompt", default_system_template)
+    system_prompt = prompt_template.format(context=context)
     
     messages = [{"role": "system", "content": system_prompt}]
     # Add history
@@ -414,6 +454,101 @@ async def get_chat_logs(
         total_pages=total_pages,
         items=items
     )
+
+# --- 提示词管理接口 ---
+
+@app.get("/prompts", response_model=List[PromptOut])
+async def list_prompts(
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """获取所有提示词"""
+    stmt = select(Prompt).order_by(Prompt.name)
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@app.post("/prompts", response_model=PromptOut)
+async def create_prompt(
+    prompt_data: PromptCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """创建新提示词"""
+    # 检查重名
+    stmt = select(Prompt).where(Prompt.name == prompt_data.name)
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"Prompt with name '{prompt_data.name}' already exists")
+    
+    new_prompt = Prompt(
+        name=prompt_data.name,
+        template=prompt_data.template,
+        description=prompt_data.description,
+        is_active=prompt_data.is_active
+    )
+    db.add(new_prompt)
+    await db.commit()
+    await db.refresh(new_prompt)
+    return new_prompt
+
+@app.put("/prompts/{prompt_id}", response_model=PromptOut)
+async def update_prompt(
+    prompt_id: UUID,
+    prompt_data: PromptUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """更新提示词"""
+    stmt = select(Prompt).where(Prompt.id == prompt_id)
+    result = await db.execute(stmt)
+    prompt_obj = result.scalar_one_or_none()
+    if not prompt_obj:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    
+    # 更新字段
+    if prompt_data.name is not None:
+        # 如果改名，检查是否冲突
+        if prompt_data.name != prompt_obj.name:
+            name_check = await db.execute(select(Prompt).where(Prompt.name == prompt_data.name))
+            if name_check.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail="New name already exists")
+        prompt_obj.name = prompt_data.name
+    
+    if prompt_data.template is not None:
+        prompt_obj.template = prompt_data.template
+        prompt_obj.version += 1  # 每次修改模板增加版本号
+    
+    if prompt_data.description is not None:
+        prompt_obj.description = prompt_data.description
+        
+    if prompt_data.is_active is not None:
+        prompt_obj.is_active = prompt_data.is_active
+    
+    prompt_obj.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(prompt_obj)
+    return prompt_obj
+
+@app.delete("/prompts/{prompt_id}")
+async def delete_prompt(
+    prompt_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """删除提示词"""
+    stmt = select(Prompt).where(Prompt.id == prompt_id)
+    result = await db.execute(stmt)
+    prompt_obj = result.scalar_one_or_none()
+    if not prompt_obj:
+        raise HTTPException(status_code=404, detail="Prompt not found")
+    
+    # 禁止删除核心系统提示词
+    if prompt_obj.name == "rag_system_prompt":
+        raise HTTPException(status_code=400, detail="Cannot delete core system prompt")
+    
+    await db.delete(prompt_obj)
+    await db.commit()
+    return {"message": "Prompt deleted successfully"}
 
 if __name__ == "__main__":
     import uvicorn

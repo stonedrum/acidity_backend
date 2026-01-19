@@ -57,3 +57,15 @@ class ChatQueryLog(Base):
     llm_response = Column(Text)  # LLM返回的完整内容
     model_name = Column(String)  # 调用的模型名称
     query_duration_seconds = Column(Float)  # 查询所花时间（秒）
+
+class Prompt(Base):
+    """提示词配置表"""
+    __tablename__ = "prompts"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(String, unique=True, index=True)  # 提示词名称，如 "rag_system_prompt"
+    template = Column(Text, nullable=False)  # 提示词模板
+    is_active = Column(Boolean, default=True)  # 是否启用
+    version = Column(Integer, default=1)
+    description = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

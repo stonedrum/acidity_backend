@@ -114,9 +114,11 @@ class RAGService:
         # Sort candidates by rerank score
         ranked_results = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
         
-        # Top 3
-        top3_results = ranked_results[:3]
-        
+        # Top 3 and similarity score > 0.4
+        top3_results = [x for x in ranked_results if x[1] > 0.7]
+        if len(top3_results) > 3:
+            top3_results = ranked_results[:3]
+
         if return_initial_results:
             # 返回初始结果和重排结果
             reranked_data = []
