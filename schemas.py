@@ -20,16 +20,54 @@ class DocumentOut(BaseModel):
     id: UUID
     filename: str
     uploader: str  # 上传用户名
+    kb_type: Optional[str] = None  # 知识库类型
     upload_time: datetime
 
 class ClauseOut(BaseModel):
     id: UUID
+    kb_type: Optional[str] = None
     chapter_path: str
     content: str
+    is_verified: bool = False
+    doc_id: Optional[UUID] = None
+    doc_name: Optional[str] = None
     score: Optional[float] = None
 
 class SearchQuery(BaseModel):
     query: str
+    kb_type: Optional[str] = None  # 可选：按类型筛选
+
+# --- 知识条款管理相关 Schema ---
+
+class ClauseCreate(BaseModel):
+    kb_type: str
+    chapter_path: str
+    content: str
+    doc_id: Optional[UUID] = None
+
+class ClauseUpdate(BaseModel):
+    kb_type: Optional[str] = None
+    chapter_path: Optional[str] = None
+    content: Optional[str] = None
+    is_verified: Optional[bool] = None
+    doc_id: Optional[UUID] = None
+
+class PaginatedClauses(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    items: List[ClauseOut]
+
+class DocumentOut(BaseModel):
+    id: UUID
+    filename: str
+    uploader: str  # 上传用户名
+    kb_type: Optional[str] = None  # 知识库类型
+    upload_time: datetime
+
+    class Config:
+        from_attributes = True
 
 class ChatMessage(BaseModel):
     role: str
@@ -40,6 +78,7 @@ class ChatRequest(BaseModel):
     history: Optional[List[ChatMessage]] = []
     stream: Optional[bool] = False
     model: Optional[str] = None
+    kb_type: Optional[str] = None  # 可选：按类型筛选
 
 class ChatQueryLogOut(BaseModel):
     id: UUID
@@ -88,3 +127,44 @@ class PromptUpdate(BaseModel):
     template: Optional[str] = None
     description: Optional[str] = None
     is_active: Optional[bool] = None
+
+# --- 数据字典相关 Schema ---
+
+class DictDataOut(BaseModel):
+    id: UUID
+    label: str
+    value: str
+    sort_order: int
+    is_active: bool
+
+    class Config:
+        from_attributes = True
+
+class DictTypeOut(BaseModel):
+    id: UUID
+    type_name: str
+    description: Optional[str]
+    data: List[DictDataOut] = []
+
+    class Config:
+        from_attributes = True
+
+class DictDataCreate(BaseModel):
+    label: str
+    value: str
+    sort_order: Optional[int] = 0
+    is_active: Optional[bool] = True
+
+class DictDataUpdate(BaseModel):
+    label: Optional[str] = None
+    value: Optional[str] = None
+    sort_order: Optional[int] = None
+    is_active: Optional[bool] = None
+
+class DictTypeCreate(BaseModel):
+    type_name: str
+    description: Optional[str] = None
+
+class DictTypeUpdate(BaseModel):
+    type_name: Optional[str] = None
+    description: Optional[str] = None

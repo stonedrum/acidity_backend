@@ -32,11 +32,12 @@ class RAGService:
     def get_embedding(self, text):
         return self.embedding_model.encode(text).tolist()
 
-    async def search_and_rerank(self, query, db_session, return_initial_results=False):
+    async def search_and_rerank(self, query, db_session, kb_type=None, return_initial_results=False):
         """
         搜索并重排
         :param query: 查询文本
         :param db_session: 数据库会话
+        :param kb_type: 知识库类型过滤 (可选)
         :param return_initial_results: 是否返回初始向量匹配结果
         :return: 如果 return_initial_results=True，返回 (initial_results, reranked_results)
                  否则只返回 reranked_results (Top 3)
@@ -65,9 +66,14 @@ class RAGService:
             .where(
                 Clause.embedding.cosine_distance(query_embedding) < distance_threshold
             )
-            .order_by(Clause.embedding.cosine_distance(query_embedding))
-            .limit(10)
         )
+        
+        # 增加知识库类型过滤
+        if kb_type:
+            stmt = stmt.where(Clause.kb_type == kb_type)
+            
+        stmt = stmt.order_by(Clause.embedding.cosine_distance(query_embedding)).limit(10)
+        
         result = await db_session.execute(stmt)
         candidates = result.scalars().all()
         

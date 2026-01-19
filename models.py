@@ -19,12 +19,14 @@ class Document(Base):
     filename = Column(String, unique=True, index=True)  # 文件名唯一
     oss_key = Column(String)
     uploader = Column(String)  # 上传用户名
+    kb_type = Column(String, index=True, comment="知识库类型：桥梁、道路、隧道等")  # 增加知识库类型
     upload_time = Column(DateTime, default=datetime.utcnow)
 
 class Clause(Base):
     __tablename__ = "clauses"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     doc_id = Column(UUID(as_uuid=True), ForeignKey("documents.id", ondelete="CASCADE"))
+    kb_type = Column(String, index=True, comment="冗余存储知识库类型，用于快速搜索过滤")  # 冗余存储类型
     chapter_path = Column(String) # e.g. "第一章 > 第1.1节"
     content = Column(Text) # Markdown content
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
@@ -69,3 +71,22 @@ class Prompt(Base):
     description = Column(String, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class DictType(Base):
+    """字典类型表 (如 kb_type)"""
+    __tablename__ = "dict_types"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type_name = Column(String, unique=True, index=True) # 如 "kb_type"
+    description = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class DictData(Base):
+    """字典数据表 (如 桥梁, 道路)"""
+    __tablename__ = "dict_data"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    type_id = Column(UUID(as_uuid=True), ForeignKey("dict_types.id", ondelete="CASCADE"))
+    label = Column(String, nullable=False) # 展示名称，如 "桥梁"
+    value = Column(String, nullable=False) # 存储值，如 "bridge"
+    sort_order = Column(Integer, default=0) # 排序号
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)

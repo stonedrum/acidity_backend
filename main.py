@@ -4,13 +4,19 @@ os.environ['TRANSFORMERS_OFFLINE'] = '1'
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['HF_DATASETS_OFFLINE'] = '1'
 
-from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, status
+from fastapi import FastAPI, Depends, UploadFile, File, HTTPException, status, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from .database import get_db, init_db
-from .models import User, Document, Clause, ApiCallLog, ChatQueryLog, Prompt
-from .schemas import UserCreate, UserLogin, Token, DocumentOut, SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs, LogQueryParams, PromptOut, PromptCreate, PromptUpdate
+from .models import User, Document, Clause, ApiCallLog, ChatQueryLog, Prompt, DictType, DictData
+from .schemas import (
+    UserCreate, UserLogin, Token, DocumentOut, SearchQuery, ClauseOut, 
+    ChatRequest, ChatQueryLogOut, PaginatedChatLogs, LogQueryParams, 
+    PromptOut, PromptCreate, PromptUpdate, DictDataOut, DictTypeOut,
+    DictTypeCreate, DictTypeUpdate, DictDataCreate, DictDataUpdate,
+    ClauseCreate, ClauseUpdate, PaginatedClauses
+)
 from .auth import get_password_hash, verify_password, create_access_token, get_current_user
 from .services.oss_service import oss_service
 from .services.pdf_service import pdf_service
@@ -58,6 +64,36 @@ async def startup_event():
             db.add(new_prompt)
             await db.commit()
             print("[INFO] 已初始化默认提示词：rag_system_prompt")
+        
+        # --- 初始化知识库类型字典 ---
+        # 检查是否已存在 kb_type 字典类型
+        stmt = select(DictType).where(DictType.type_name == "kb_type")
+        result = await db.execute(stmt)
+        kb_type_dict = result.scalar_one_or_none()
+        
+        if not kb_type_dict:
+            # 创建字典类型
+            kb_type_dict = DictType(type_name="kb_type", description="知识库所属类型分类")
+            db.add(kb_type_dict)
+            await db.flush() # 获取 ID
+            
+            # 创建初始字典数据
+            default_data = [
+                {"label": "桥梁", "value": "bridge", "sort": 1},
+                {"label": "道路", "value": "road", "sort": 2},
+                {"label": "隧道", "value": "tunnel", "sort": 3},
+                {"label": "公园绿化", "value": "park", "sort": 4},
+                {"label": "排水", "value": "drainage", "sort": 5}
+            ]
+            for item in default_data:
+                db.add(DictData(
+                    type_id=kb_type_dict.id,
+                    label=item["label"],
+                    value=item["value"],
+                    sort_order=item["sort"]
+                ))
+            await db.commit()
+            print("[INFO] 已初始化数据字典：kb_type")
 
 async def get_prompt(db: AsyncSession, name: str, default_template: str = None) -> str:
     """从数据库获取提示词"""
@@ -150,7 +186,12 @@ async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
     return {"access_token": access_token, "token_type": "bearer"}
 
 @app.post("/upload")
-async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(get_db), current_user: str = Depends(get_current_user)):
+async def upload_pdf(
+    file: UploadFile = File(...), 
+    kb_type: str = Form(...),  # 接收知识库类型
+    db: AsyncSession = Depends(get_db), 
+    current_user: str = Depends(get_current_user)
+):
     # 1. Save locally temporarily
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
@@ -178,11 +219,12 @@ async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(ge
                 detail=f"文件 '{file.filename}' 已存在，请使用不同的文件名"
             )
         
-        # 5. Create Document record (保存原始文件名，OSS key使用UUID文件名，记录上传人)
+        # 5. Create Document record (保存原始文件名，OSS key使用UUID文件名，记录上传人，记录知识库类型)
         doc = Document(
             filename=file.filename, 
             oss_key=oss_key,
-            uploader=current_user  # 记录上传用户名
+            uploader=current_user,  # 记录上传用户名
+            kb_type=kb_type        # 记录知识库类型
         )
         db.add(doc)
         await db.flush() # Get doc.id
@@ -195,6 +237,7 @@ async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(ge
             embedding = rag_service.get_embedding(item["content"])
             clause = Clause(
                 doc_id=doc.id,
+                kb_type=kb_type, # 冗余存储类型
                 chapter_path=item["chapter_path"],
                 content=item["content"],
                 embedding=embedding
@@ -210,12 +253,17 @@ async def upload_pdf(file: UploadFile = File(...), db: AsyncSession = Depends(ge
 
 @app.post("/search", response_model=list[ClauseOut])
 async def search(query_data: SearchQuery, db: AsyncSession = Depends(get_db)):
-    results = await rag_service.search_and_rerank(query_data.query, db)
+    results = await rag_service.search_and_rerank(
+        query_data.query, 
+        db, 
+        kb_type=query_data.kb_type # 传递类型筛选
+    )
     
     out = []
     for clause, score in results:
         out.append(ClauseOut(
             id=clause.id,
+            kb_type=clause.kb_type,
             chapter_path=clause.chapter_path,
             content=clause.content,
             score=float(score)
@@ -237,7 +285,10 @@ async def chat(
     
     # 1. RAG: Retrieve relevant clauses (获取初始结果和重排结果)
     initial_results, reranked_results = await rag_service.search_and_rerank(
-        request.message, db, return_initial_results=True
+        request.message, 
+        db, 
+        kb_type=request.kb_type, # 传递类型筛选
+        return_initial_results=True
     )
     
     # 使用重排结果构建上下文
@@ -549,6 +600,357 @@ async def delete_prompt(
     await db.delete(prompt_obj)
     await db.commit()
     return {"message": "Prompt deleted successfully"}
+
+# --- 数据字典接口 ---
+
+@app.get("/dicts/{type_name}", response_model=List[DictDataOut])
+async def get_dict_by_type(type_name: str, db: AsyncSession = Depends(get_db)):
+    """根据类型名称获取字典项（如 /dicts/kb_type）"""
+    stmt = (
+        select(DictData)
+        .join(DictType)
+        .where(DictType.type_name == type_name, DictData.is_active == True)
+        .order_by(DictData.sort_order)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
+
+@app.get("/dict-types", response_model=List[DictTypeOut])
+async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: str = Depends(get_current_user)):
+    """列出所有字典类型（管理端使用）"""
+    stmt = select(DictType)
+    result = await db.execute(stmt)
+    types = result.scalars().all()
+    
+    # 手动加载关联数据，避免 N+1 或延迟加载问题
+    out = []
+    for t in types:
+        data_stmt = select(DictData).where(DictData.type_id == t.id).order_by(DictData.sort_order)
+        data_result = await db.execute(data_stmt)
+        t_data = data_result.scalars().all()
+        out.append(DictTypeOut(
+            id=t.id,
+            type_name=t.type_name,
+            description=t.description,
+            data=[DictDataOut.from_orm(d) for d in t_data]
+        ))
+    return out
+
+@app.post("/dict-types", response_model=DictTypeOut)
+async def create_dict_type(
+    type_data: DictTypeCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """创建字典类型"""
+    stmt = select(DictType).where(DictType.type_name == type_data.type_name)
+    result = await db.execute(stmt)
+    if result.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail="Dict type already exists")
+    
+    new_type = DictType(**type_data.dict())
+    db.add(new_type)
+    await db.commit()
+    await db.refresh(new_type)
+    return DictTypeOut(id=new_type.id, type_name=new_type.type_name, description=new_type.description, data=[])
+
+@app.put("/dict-types/{type_id}", response_model=DictTypeOut)
+async def update_dict_type(
+    type_id: UUID,
+    type_data: DictTypeUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """更新字典类型"""
+    stmt = select(DictType).where(DictType.id == type_id)
+    result = await db.execute(stmt)
+    dict_type = result.scalar_one_or_none()
+    if not dict_type:
+        raise HTTPException(status_code=404, detail="Dict type not found")
+    
+    for key, value in type_data.dict(exclude_unset=True).items():
+        setattr(dict_type, key, value)
+    
+    await db.commit()
+    await db.refresh(dict_type)
+    
+    # 加载数据项
+    data_stmt = select(DictData).where(DictData.type_id == dict_type.id).order_by(DictData.sort_order)
+    data_result = await db.execute(data_stmt)
+    t_data = data_result.scalars().all()
+    
+    return DictTypeOut(
+        id=dict_type.id,
+        type_name=dict_type.type_name,
+        description=dict_type.description,
+        data=[DictDataOut.from_orm(d) for d in t_data]
+    )
+
+@app.delete("/dict-types/{type_id}")
+async def delete_dict_type(
+    type_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """删除字典类型"""
+    stmt = select(DictType).where(DictType.id == type_id)
+    result = await db.execute(stmt)
+    dict_type = result.scalar_one_or_none()
+    if not dict_type:
+        raise HTTPException(status_code=404, detail="Dict type not found")
+    
+    # 核心字典类型禁止删除
+    if dict_type.type_name == "kb_type":
+        raise HTTPException(status_code=400, detail="Core dict type 'kb_type' cannot be deleted")
+        
+    await db.delete(dict_type)
+    await db.commit()
+    return {"message": "Dict type deleted"}
+
+# --- 字典数据项 CRUD ---
+
+@app.post("/dict-data/{type_id}", response_model=DictDataOut)
+async def create_dict_data(
+    type_id: UUID,
+    data_item: DictDataCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """创建字典数据项"""
+    # 检查类型是否存在
+    stmt = select(DictType).where(DictType.id == type_id)
+    result = await db.execute(stmt)
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Dict type not found")
+        
+    new_data = DictData(type_id=type_id, **data_item.dict())
+    db.add(new_data)
+    await db.commit()
+    await db.refresh(new_data)
+    return new_data
+
+@app.put("/dict-data/{data_id}", response_model=DictDataOut)
+async def update_dict_data(
+    data_id: UUID,
+    data_item: DictDataUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """更新字典数据项"""
+    stmt = select(DictData).where(DictData.id == data_id)
+    result = await db.execute(stmt)
+    db_data = result.scalar_one_or_none()
+    if not db_data:
+        raise HTTPException(status_code=404, detail="Dict data not found")
+    
+    for key, value in data_item.dict(exclude_unset=True).items():
+        setattr(db_data, key, value)
+    
+    await db.commit()
+    await db.refresh(db_data)
+    return db_data
+
+@app.delete("/dict-data/{data_id}")
+async def delete_dict_data(
+    data_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """删除字典数据项"""
+    stmt = select(DictData).where(DictData.id == data_id)
+    result = await db.execute(stmt)
+    db_data = result.scalar_one_or_none()
+    if not db_data:
+        raise HTTPException(status_code=404, detail="Dict data not found")
+        
+    await db.delete(db_data)
+    await db.commit()
+    return {"message": "Dict data deleted"}
+
+# --- 知识条款管理接口 ---
+
+@app.get("/clauses", response_model=PaginatedClauses)
+async def list_clauses(
+    page: int = 1,
+    page_size: int = 15,
+    kb_type: Optional[str] = None,
+    doc_id: Optional[UUID] = None,
+    keyword: Optional[str] = None,
+    is_verified: Optional[bool] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """分页获取知识条款列表"""
+    stmt = select(Clause)
+    if kb_type:
+        stmt = stmt.where(Clause.kb_type == kb_type)
+    if doc_id:
+        stmt = stmt.where(Clause.doc_id == doc_id)
+    if keyword:
+        stmt = stmt.where(Clause.content.ilike(f"%{keyword}%") | Clause.chapter_path.ilike(f"%{keyword}%"))
+    if is_verified is not None:
+        stmt = stmt.where(Clause.is_verified == is_verified)
+    
+    # 计算总数
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_res = await db.execute(count_stmt)
+    total = total_res.scalar()
+    
+    # 分页排序：
+    # 1. 优先显示未校验 (is_verified 为 False 的排在前面)
+    # 2. 其次按章节路径排序
+    # 3. 最后按 ID 排序（保底，确保编辑后物理位置变了但逻辑排序不变）
+    stmt = stmt.order_by(
+        Clause.is_verified.asc(), 
+        Clause.chapter_path.asc(), 
+        Clause.id.asc()
+    ).offset((page - 1) * page_size).limit(page_size)
+    result = await db.execute(stmt)
+    clauses = result.scalars().all()
+    
+    # 获取文档名称映射
+    doc_ids = list(set(c.doc_id for c in clauses if c.doc_id))
+    doc_map = {}
+    if doc_ids:
+        doc_stmt = select(Document.id, Document.filename).where(Document.id.in_(doc_ids))
+        doc_res = await db.execute(doc_stmt)
+        doc_map = {row.id: row.filename for row in doc_res}
+    
+    return PaginatedClauses(
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+        items=[
+            ClauseOut(
+                id=c.id,
+                kb_type=c.kb_type,
+                chapter_path=c.chapter_path,
+                content=c.content,
+                is_verified=c.is_verified, # 确保返回真实的校验状态
+                doc_id=c.doc_id, # 返回文档 ID
+                doc_name=doc_map.get(c.doc_id, "手动新增") # 返回文档名称
+            ) for c in clauses
+        ]
+    )
+
+@app.post("/clauses", response_model=ClauseOut)
+async def create_clause(
+    data: ClauseCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """手动创建知识条款"""
+    embedding = rag_service.get_embedding(data.content)
+    new_clause = Clause(
+        kb_type=data.kb_type,
+        chapter_path=data.chapter_path,
+        content=data.content,
+        doc_id=data.doc_id,
+        embedding=embedding,
+        is_verified=True # 手动创建的默认为已校验
+    )
+    db.add(new_clause)
+    await db.commit()
+    await db.refresh(new_clause)
+    
+    # 获取文档名称
+    doc_name = "手动新增"
+    if new_clause.doc_id:
+        doc_stmt = select(Document.filename).where(Document.id == new_clause.doc_id)
+        doc_res = await db.execute(doc_stmt)
+        doc_name = doc_res.scalar() or "手动新增"
+
+    return ClauseOut(
+        id=new_clause.id,
+        kb_type=new_clause.kb_type,
+        chapter_path=new_clause.chapter_path,
+        content=new_clause.content,
+        is_verified=new_clause.is_verified,
+        doc_id=new_clause.doc_id,
+        doc_name=doc_name
+    )
+
+@app.put("/clauses/{clause_id}", response_model=ClauseOut)
+async def update_clause(
+    clause_id: UUID,
+    data: ClauseUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """更新知识条款"""
+    stmt = select(Clause).where(Clause.id == clause_id)
+    result = await db.execute(stmt)
+    clause = result.scalar_one_or_none()
+    if not clause:
+        raise HTTPException(status_code=404, detail="Clause not found")
+    
+    # 如果修改了内容，需要重新生成向量
+    if data.content is not None and data.content != clause.content:
+        clause.embedding = rag_service.get_embedding(data.content)
+        clause.content = data.content
+    
+    if data.kb_type is not None:
+        clause.kb_type = data.kb_type
+    if data.chapter_path is not None:
+        clause.chapter_path = data.chapter_path
+    if data.is_verified is not None:
+        clause.is_verified = data.is_verified
+    if data.doc_id is not None:
+        clause.doc_id = data.doc_id
+        
+    await db.commit()
+    await db.refresh(clause)
+    
+    # 获取文档名称
+    doc_name = "手动新增"
+    if clause.doc_id:
+        doc_stmt = select(Document.filename).where(Document.id == clause.doc_id)
+        doc_res = await db.execute(doc_stmt)
+        doc_name = doc_res.scalar() or "手动新增"
+
+    return ClauseOut(
+        id=clause.id,
+        kb_type=clause.kb_type,
+        chapter_path=clause.chapter_path,
+        content=clause.content,
+        is_verified=clause.is_verified,
+        doc_id=clause.doc_id,
+        doc_name=doc_name
+    )
+
+@app.delete("/clauses/{clause_id}")
+async def delete_clause(
+    clause_id: UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """删除知识条款"""
+    stmt = select(Clause).where(Clause.id == clause_id)
+    result = await db.execute(stmt)
+    clause = result.scalar_one_or_none()
+    if not clause:
+        raise HTTPException(status_code=404, detail="Clause not found")
+        
+    await db.delete(clause)
+    await db.commit()
+    return {"message": "Clause deleted"}
+
+# --- 文档管理接口 ---
+
+@app.get("/documents", response_model=List[DocumentOut])
+async def list_documents(
+    keyword: Optional[str] = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """获取所有文档列表（支持模糊匹配文件名）"""
+    stmt = select(Document)
+    if keyword:
+        stmt = stmt.where(Document.filename.ilike(f"%{keyword}%"))
+    stmt = stmt.order_by(Document.upload_time.desc())
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 if __name__ == "__main__":
     import uvicorn
