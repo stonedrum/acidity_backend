@@ -1,5 +1,6 @@
 import time
 from typing import Optional, List
+from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,29 +58,49 @@ async def chat(
     
     context = ""
     referenced_doc_ids = set()
-    results = []
-    for i, reranked_item in enumerate(reranked_results):
-        clause_id = reranked_item["clause_id"]
-        stmt = select(Clause).where(Clause.id == clause_id)
-        result = await db.execute(stmt)
-        clause = result.scalar_one_or_none()
-        if clause:
-            context += f"【参考资料{i+1}】章节路径：{clause.chapter_path}\n内容：{clause.content}\n\n"
-            referenced_doc_ids.add(clause.doc_id)
-            results.append((clause, reranked_item["rerank_score"]))
     
+    # 优化：批量获取完整的条款和对应的文档信息
+    if reranked_results:
+        clause_ids = [UUID(item["clause_id"]) if isinstance(item["clause_id"], str) else item["clause_id"] for item in reranked_results]
+        # 使用 join 预加载文档信息
+        from sqlalchemy.orm import joinedload
+        stmt = select(Clause).options(joinedload(Clause.document)).where(Clause.id.in_(clause_ids))
+        result = await db.execute(stmt)
+        # 将结果转为字典方便按顺序查找
+        clauses_map = {c.id: c for c in result.scalars().all()}
+        
+        valid_reranked_items = []
+        for i, item in enumerate(reranked_results):
+            cid = UUID(item["clause_id"]) if isinstance(item["clause_id"], str) else item["clause_id"]
+            clause = clauses_map.get(cid)
+            if clause:
+                doc_name = clause.document.filename if clause.document else "手动录入"
+                context += f"【参考资料{i+1}】(来自文档：{doc_name}) 章节路径：{clause.chapter_path}\n内容：{clause.content}\n\n"
+                if clause.doc_id:
+                    referenced_doc_ids.add(clause.doc_id)
+                valid_reranked_items.append(item)
+        
+        # 更新重排结果为实际查到的有效条目（记录日志用）
+        reranked_results = valid_reranked_items
+
     referenced_docs = []
     if referenced_doc_ids:
-        stmt = select(Document).where(Document.id.in_(referenced_doc_ids))
-        result = await db.execute(stmt)
-        referenced_docs = result.scalars().all()
+        # 移除可能存在的 None
+        clean_doc_ids = [rid for rid in referenced_doc_ids if rid is not None]
+        if clean_doc_ids:
+            stmt = select(Document).where(Document.id.in_(clean_doc_ids))
+            result = await db.execute(stmt)
+            referenced_docs = result.scalars().all()
     
     reference_links = ""
     if referenced_docs:
-        reference_links = "\n\n---\n**📎 引用文件：**\n"
-        for doc in referenced_docs:
-            file_url = oss_service.get_file_url(doc.oss_key)
-            reference_links += f"- [{doc.filename}]({file_url})\n"
+        # 过滤掉没有 oss_key 的文档（手动新增的文档可能没上传文件）
+        valid_docs = [d for d in referenced_docs if d.oss_key]
+        if valid_docs:
+            reference_links = "\n\n---\n**📎 引用文件：**\n"
+            for doc in valid_docs:
+                file_url = oss_service.get_file_url(doc.oss_key)
+                reference_links += f"- [{doc.filename}]({file_url})\n"
     
     # 2. Prepare Prompt
     default_system_template = """你是市政设施运维专家，精通结构健康监测、病害诊断、养护修复、应急处置及行业规范。请基于市政设施全生命周期运维经验，用专业、简洁的语言解答道桥隧巡检、维修、管理相关问题。

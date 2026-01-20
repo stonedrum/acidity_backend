@@ -1,6 +1,7 @@
 import uuid
 from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Float, Boolean, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
+from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from datetime import datetime
 from .config import settings
@@ -21,6 +22,8 @@ class Document(Base):
     uploader = Column(String)  # 上传用户名
     kb_type = Column(String, index=True, comment="知识库类型：桥梁、道路、隧道等")  # 增加知识库类型
     upload_time = Column(DateTime, default=datetime.utcnow)
+    
+    clauses = relationship("Clause", back_populates="document", cascade="all, delete-orphan")
 
 class Clause(Base):
     __tablename__ = "clauses"
@@ -31,6 +34,8 @@ class Clause(Base):
     content = Column(Text) # Markdown content
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
     is_verified = Column(Boolean, default=False)  # 是否已校验
+
+    document = relationship("Document", back_populates="clauses")
 
 class ApiCallLog(Base):
     """接口调用日志表"""

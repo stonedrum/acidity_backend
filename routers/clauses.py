@@ -5,7 +5,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from ..database import get_db
 from ..models import Clause, Document
-from ..schemas import ClauseOut, ClauseCreate, ClauseUpdate, PaginatedClauses, ClauseBatchCreate, BatchInsertResult
+from ..schemas import (
+    ClauseOut, ClauseCreate, ClauseUpdate, PaginatedClauses, 
+    ClauseBatchCreate, BatchInsertResult, ClauseBatchUpdate
+)
 from ..auth import get_current_user
 from ..services.rag_service import rag_service
 
@@ -142,6 +145,34 @@ async def batch_create_clauses(
     db.add_all(new_clauses)
     await db.commit()
     return BatchInsertResult(inserted=len(new_clauses))
+
+@router.post("/clauses/batch-update")
+async def batch_update_clauses(
+    data: ClauseBatchUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """批量更新知识条款"""
+    if not data.ids:
+        raise HTTPException(status_code=400, detail="IDs cannot be empty")
+    
+    stmt = select(Clause).where(Clause.id.in_(data.ids))
+    result = await db.execute(stmt)
+    clauses = result.scalars().all()
+    
+    if not clauses:
+        raise HTTPException(status_code=404, detail="No clauses found for given IDs")
+    
+    for clause in clauses:
+        if data.kb_type is not None:
+            clause.kb_type = data.kb_type
+        if data.doc_id is not None:
+            clause.doc_id = data.doc_id
+        if data.is_verified is not None:
+            clause.is_verified = data.is_verified
+            
+    await db.commit()
+    return {"updated": len(clauses)}
 
 @router.put("/clauses/{clause_id}", response_model=ClauseOut)
 async def update_clause(

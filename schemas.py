@@ -64,6 +64,12 @@ class ClauseUpdate(BaseModel):
     is_verified: Optional[bool] = None
     doc_id: Optional[UUID] = None
 
+class ClauseBatchUpdate(BaseModel):
+    ids: List[UUID]
+    kb_type: Optional[str] = None
+    doc_id: Optional[UUID] = None
+    is_verified: Optional[bool] = None
+
 class PaginatedClauses(BaseModel):
     total: int
     page: int
@@ -74,12 +80,29 @@ class PaginatedClauses(BaseModel):
 class DocumentOut(BaseModel):
     id: UUID
     filename: str
-    uploader: str  # 上传用户名
-    kb_type: Optional[str] = None  # 知识库类型
+    uploader: str
+    kb_type: Optional[str] = None
     upload_time: datetime
+    file_url: Optional[str] = None
 
     class Config:
         from_attributes = True
+
+class PaginatedDocuments(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    items: List[DocumentOut]
+
+class DocumentCreate(BaseModel):
+    filename: str
+    kb_type: str
+    oss_key: Optional[str] = None
+
+class DocumentUpdate(BaseModel):
+    filename: Optional[str] = None
+    kb_type: Optional[str] = None
 
 class ChatMessage(BaseModel):
     role: str

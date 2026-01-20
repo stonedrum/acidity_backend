@@ -4,10 +4,10 @@ import uuid
 from typing import Optional, List
 from fastapi import APIRouter, Depends, UploadFile, File, HTTPException, Form
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from ..database import get_db
 from ..models import Document, Clause
-from ..schemas import DocumentOut
+from ..schemas import DocumentOut, DocumentUpdate, PaginatedDocuments
 from ..auth import get_current_user
 from ..services.oss_service import oss_service
 from ..services.pdf_service import pdf_service
@@ -79,16 +79,150 @@ async def upload_pdf(
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
 
-@router.get("/documents", response_model=List[DocumentOut])
+@router.post("/documents")
+async def create_document_simple(
+    file: UploadFile = File(...), 
+    kb_type: str = Form(...),
+    db: AsyncSession = Depends(get_db), 
+    current_user: str = Depends(get_current_user)
+):
+    """仅上传文档并创建记录，不进行 RAG 解析"""
+    # 1. 检查文件名是否重复
+    existing_doc = await db.execute(select(Document).where(Document.filename == file.filename))
+    if existing_doc.scalar_one_or_none():
+        raise HTTPException(status_code=400, detail=f"文件 '{file.filename}' 已存在")
+
+    # 2. 保存临时文件并上传 OSS
+    temp_dir = "temp"
+    os.makedirs(temp_dir, exist_ok=True)
+    temp_file_path = os.path.join(temp_dir, f"{uuid.uuid4()}_{file.filename}")
+    with open(temp_file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    try:
+        file_ext = os.path.splitext(file.filename)[1]
+        oss_filename = f"{uuid.uuid4().hex}{file_ext}"
+        with open(temp_file_path, "rb") as f:
+            oss_key = oss_service.upload_file(f.read(), oss_filename, directory="laws")
+        
+        # 3. 创建数据库记录
+        doc = Document(
+            filename=file.filename, 
+            oss_key=oss_key,
+            uploader=current_user,
+            kb_type=kb_type
+        )
+        db.add(doc)
+        await db.commit()
+        await db.refresh(doc)
+        return doc
+    finally:
+        if os.path.exists(temp_file_path):
+            os.remove(temp_file_path)
+
+@router.put("/documents/{doc_id}", response_model=DocumentOut)
+async def update_document(
+    doc_id: uuid.UUID,
+    data: DocumentUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """更新文档信息"""
+    stmt = select(Document).where(Document.id == doc_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    if data.filename is not None:
+        # 检查新文件名是否与其他文档冲突
+        if data.filename != doc.filename:
+            existing = await db.execute(select(Document).where(Document.filename == data.filename))
+            if existing.scalar_one_or_none():
+                raise HTTPException(status_code=400, detail=f"文件名 '{data.filename}' 已被使用")
+        doc.filename = data.filename
+        
+    if data.kb_type is not None:
+        # 如果修改了文档的 kb_type，通常也需要同步修改关联的 clauses 的 kb_type
+        doc.kb_type = data.kb_type
+        from sqlalchemy import update
+        await db.execute(
+            update(Clause).where(Clause.doc_id == doc_id).values(kb_type=data.kb_type)
+        )
+        
+    await db.commit()
+    await db.refresh(doc)
+    return DocumentOut(
+        id=doc.id,
+        filename=doc.filename,
+        uploader=doc.uploader,
+        kb_type=doc.kb_type,
+        upload_time=doc.upload_time,
+        file_url=oss_service.get_file_url(doc.oss_key) if doc.oss_key else None
+    )
+
+@router.get("/documents", response_model=PaginatedDocuments)
 async def list_documents(
+    page: int = 1,
+    page_size: int = 20,
+    kb_type: Optional[str] = None,
     keyword: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: str = Depends(get_current_user)
 ):
-    """获取所有文档列表（支持模糊匹配文件名）"""
+    """获取所有文档列表（支持模糊匹配文件名、按类型筛选、分页）"""
     stmt = select(Document)
+    if kb_type:
+        stmt = stmt.where(Document.kb_type == kb_type)
     if keyword:
         stmt = stmt.where(Document.filename.ilike(f"%{keyword}%"))
-    stmt = stmt.order_by(Document.upload_time.desc())
+    
+    # 计算总数
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total_res = await db.execute(count_stmt)
+    total = total_res.scalar()
+    
+    # 分页排序
+    stmt = stmt.order_by(Document.upload_time.desc()).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(stmt)
-    return result.scalars().all()
+    docs = result.scalars().all()
+    
+    # 填充结果
+    items = [
+        DocumentOut(
+            id=d.id,
+            filename=d.filename,
+            uploader=d.uploader,
+            kb_type=d.kb_type,
+            upload_time=d.upload_time,
+            file_url=oss_service.get_file_url(d.oss_key) if d.oss_key else None
+        ) for d in docs
+    ]
+    
+    return PaginatedDocuments(
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=(total + page_size - 1) // page_size,
+        items=items
+    )
+
+@router.delete("/documents/{doc_id}")
+async def delete_document(
+    doc_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """删除文档及其关联的所有条款"""
+    stmt = select(Document).where(Document.id == doc_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    
+    # 删除 OSS 文件（可选，如果需要同步删除）
+    # oss_service.delete_file(doc.oss_key)
+    
+    await db.delete(doc)
+    await db.commit()
+    return {"message": "Document and associated clauses deleted"}
