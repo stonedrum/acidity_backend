@@ -1,11 +1,11 @@
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from ..database import get_db
 from ..models import Clause, Document
-from ..schemas import ClauseOut, ClauseCreate, ClauseUpdate, PaginatedClauses
+from ..schemas import ClauseOut, ClauseCreate, ClauseUpdate, PaginatedClauses, ClauseBatchCreate, BatchInsertResult
 from ..auth import get_current_user
 from ..services.rag_service import rag_service
 
@@ -109,6 +109,39 @@ async def create_clause(
         doc_id=new_clause.doc_id,
         doc_name=doc_name
     )
+
+@router.post("/clauses/batch", response_model=BatchInsertResult)
+async def batch_create_clauses(
+    data: ClauseBatchCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    """批量导入知识条款"""
+    if not data.items:
+        raise HTTPException(status_code=400, detail="Items cannot be empty")
+
+    new_clauses: List[Clause] = []
+    for item in data.items:
+        if not item.content:
+            continue
+        embedding = rag_service.get_embedding(item.content)
+        new_clauses.append(
+            Clause(
+                kb_type=data.kb_type,
+                chapter_path=item.chapter_path,
+                content=item.content,
+                doc_id=data.doc_id,
+                embedding=embedding,
+                is_verified=True
+            )
+        )
+
+    if not new_clauses:
+        raise HTTPException(status_code=400, detail="No valid items to insert")
+
+    db.add_all(new_clauses)
+    await db.commit()
+    return BatchInsertResult(inserted=len(new_clauses))
 
 @router.put("/clauses/{clause_id}", response_model=ClauseOut)
 async def update_clause(

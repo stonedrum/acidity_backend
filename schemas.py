@@ -45,6 +45,18 @@ class ClauseCreate(BaseModel):
     content: str
     doc_id: Optional[UUID] = None
 
+class ClauseBatchItem(BaseModel):
+    chapter_path: str
+    content: str
+
+class ClauseBatchCreate(BaseModel):
+    kb_type: str
+    doc_id: Optional[UUID] = None
+    items: List[ClauseBatchItem]
+
+class BatchInsertResult(BaseModel):
+    inserted: int
+
 class ClauseUpdate(BaseModel):
     kb_type: Optional[str] = None
     chapter_path: Optional[str] = None
