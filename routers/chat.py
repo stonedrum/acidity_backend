@@ -56,6 +56,35 @@ async def chat(
         return_initial_results=True
     )
     
+    # 如果没有找到任何匹配的参考资料，直接返回提示信息，不再调用大模型
+    if not reranked_results:
+        no_result_msg = "您好，未找到相关参考资料。"
+        
+        # 记录日志
+        try:
+            query_duration = time.time() - query_start_time
+            chat_log = ChatQueryLog(
+                username=username,
+                query_content=request.message,
+                initial_rag_results=initial_results,
+                reranked_results=[],
+                llm_response=no_result_msg,
+                llm_messages=[{"role": "user", "content": request.message}], # 仅记录当前提问
+                model_name=model_name,
+                query_duration_seconds=query_duration
+            )
+            db.add(chat_log)
+            await db.commit()
+        except Exception as e:
+            print(f"[ERROR] 保存查询记录失败: {e}")
+
+        if request.stream:
+            async def empty_stream():
+                yield no_result_msg
+            return StreamingResponse(empty_stream(), media_type="text/plain; charset=utf-8")
+        else:
+            return {"content": no_result_msg}
+
     context = ""
     referenced_doc_ids = set()
     
@@ -147,6 +176,7 @@ async def chat(
                         initial_rag_results=initial_results,
                         reranked_results=reranked_results,
                         llm_response=collected_content,
+                        llm_messages=messages,  # 保存完整的消息列表
                         model_name=model_name,
                         query_duration_seconds=query_duration
                     )
@@ -170,6 +200,7 @@ async def chat(
                 initial_rag_results=initial_results,
                 reranked_results=reranked_results,
                 llm_response=response_content,
+                llm_messages=messages,  # 保存完整的消息列表
                 model_name=model_name,
                 query_duration_seconds=query_duration
             )
@@ -216,6 +247,7 @@ async def get_chat_logs(
             initial_rag_results=log.initial_rag_results,
             reranked_results=log.reranked_results,
             llm_response=log.llm_response,
+            llm_messages=log.llm_messages, # 新增字段
             model_name=log.model_name,
             query_duration_seconds=log.query_duration_seconds
         ))

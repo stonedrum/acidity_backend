@@ -123,6 +123,7 @@ class ChatQueryLogOut(BaseModel):
     initial_rag_results: Optional[List[dict]] = None  # JSONB 字段，存储为列表
     reranked_results: Optional[List[dict]] = None  # JSONB 字段，存储为列表
     llm_response: Optional[str] = None
+    llm_messages: Optional[List[dict]] = None  # 包含完整的 Prompt 上下文
     model_name: Optional[str] = None
     query_duration_seconds: Optional[float] = None
 
