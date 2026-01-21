@@ -6,9 +6,10 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from ..database import get_db
-from ..models import Document, Clause, ChatQueryLog
+from ..models import Document, Clause, ChatQueryLog, ModelComparisonVote
 from ..schemas import (
-    SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs
+    SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs,
+    ComparisonVoteCreate, ComparisonVoteOut, PaginatedComparisonVotes, ComparisonStats
 )
 from ..auth import get_current_user
 from ..services.rag_service import rag_service
@@ -258,4 +259,87 @@ async def get_chat_logs(
         page_size=page_size,
         total_pages=total_pages,
         items=items
+    )
+
+@router.post("/comparison/vote")
+async def save_comparison_vote(
+    vote: ComparisonVoteCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    # 尝试从最近的查询日志中恢复 llm_messages (如果前端没传)
+    final_messages = vote.llm_messages
+    if not final_messages:
+        # 查找该用户最近一次针对该内容的查询日志
+        stmt = select(ChatQueryLog.llm_messages).where(
+            ChatQueryLog.username == (current_user or "anonymous"),
+            ChatQueryLog.query_content == vote.query_content
+        ).order_by(desc(ChatQueryLog.query_time)).limit(1)
+        res = await db.execute(stmt)
+        final_messages = res.scalar()
+
+    new_vote = ModelComparisonVote(
+        username=current_user or "anonymous",
+        query_content=vote.query_content,
+        qwen_response=vote.qwen_response,
+        deepseek_response=vote.deepseek_response,
+        winner=vote.winner,
+        llm_messages=final_messages
+    )
+    db.add(new_vote)
+    await db.commit()
+    return {"status": "ok", "message": "投票已记录"}
+
+@router.get("/comparison/votes", response_model=PaginatedComparisonVotes)
+async def get_comparison_votes(
+    page: int = 1,
+    page_size: int = 15,
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    query = select(ModelComparisonVote).order_by(desc(ModelComparisonVote.vote_time))
+    
+    count_query = select(func.count()).select_from(ModelComparisonVote)
+    total_result = await db.execute(count_query)
+    total = total_result.scalar()
+    
+    offset = (page - 1) * page_size
+    query = query.offset(offset).limit(page_size)
+    result = await db.execute(query)
+    votes = result.scalars().all()
+    
+    total_pages = (total + page_size - 1) // page_size if total > 0 else 0
+    
+    return PaginatedComparisonVotes(
+        total=total,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+        items=votes
+    )
+
+@router.get("/comparison/stats", response_model=ComparisonStats)
+async def get_comparison_stats(
+    db: AsyncSession = Depends(get_db),
+    current_user: str = Depends(get_current_user)
+):
+    # 总票数
+    total_stmt = select(func.count()).select_from(ModelComparisonVote)
+    total_res = await db.execute(total_stmt)
+    total = total_res.scalar() or 0
+    
+    # Qwen 胜场 (winner=1)
+    qwen_stmt = select(func.count()).select_from(ModelComparisonVote).where(ModelComparisonVote.winner == 1)
+    qwen_res = await db.execute(qwen_stmt)
+    qwen_wins = qwen_res.scalar() or 0
+    
+    # DeepSeek 胜场 (winner=2)
+    ds_stmt = select(func.count()).select_from(ModelComparisonVote).where(ModelComparisonVote.winner == 2)
+    ds_res = await db.execute(ds_stmt)
+    ds_wins = ds_res.scalar() or 0
+    
+    return ComparisonStats(
+        total_votes=total,
+        qwen_wins=qwen_wins,
+        deepseek_wins=ds_wins
     )

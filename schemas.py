@@ -204,3 +204,35 @@ class DictTypeCreate(BaseModel):
 class DictTypeUpdate(BaseModel):
     type_name: Optional[str] = None
     description: Optional[str] = None
+
+class ComparisonVoteCreate(BaseModel):
+    query_content: str
+    qwen_response: str
+    deepseek_response: str
+    winner: int # 1 or 2
+    llm_messages: Optional[List[dict]] = None
+
+class ComparisonVoteOut(BaseModel):
+    id: UUID
+    vote_time: datetime
+    username: str
+    query_content: str
+    qwen_response: str
+    deepseek_response: str
+    winner: int
+    llm_messages: Optional[List[dict]] = None
+
+    class Config:
+        from_attributes = True
+
+class PaginatedComparisonVotes(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    items: List[ComparisonVoteOut]
+
+class ComparisonStats(BaseModel):
+    total_votes: int
+    qwen_wins: int
+    deepseek_wins: int

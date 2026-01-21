@@ -5,10 +5,17 @@ from typing import List, Dict, Any, AsyncGenerator
 
 class LLMService:
     def __init__(self):
-        self.client = AsyncOpenAI(
+        self.default_client = AsyncOpenAI(
             api_key=settings.LLM_API_KEY,
             base_url=settings.LLM_BASE_URL
         )
+        # 只有在配置了 DEEPSEEK_API_KEY 时才初始化 deepseek 客户端
+        self.deepseek_client = None
+        if settings.DEEPSEEK_API_KEY:
+            self.deepseek_client = AsyncOpenAI(
+                api_key=settings.DEEPSEEK_API_KEY,
+                base_url=settings.DEEPSEEK_BASE_URL
+            )
 
     async def chat_completion(
         self, 
@@ -21,7 +28,13 @@ class LLMService:
         """
         target_model = model or settings.LLM_MODEL
         
-        response = await self.client.chat.completions.create(
+        # 选择客户端：如果设置了 DEEPSEEK_API_KEY 且模型包含 deepseek，则使用专门的 deepseek 客户端
+        # 否则一律使用默认客户端（如阿里云 DashScope）
+        client = self.default_client
+        if "deepseek" in target_model.lower() and self.deepseek_client:
+            client = self.deepseek_client
+        
+        response = await client.chat.completions.create(
             model=target_model,
             messages=messages,
             stream=stream,

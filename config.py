@@ -19,15 +19,19 @@ class Settings(BaseSettings):
     # 模型路径：如果是本地路径（以 / 或 ./ 开头），则直接使用；否则为 HuggingFace 模型名称
     # 默认情况下，sentence-transformers 会将模型缓存在 ~/.cache/huggingface/hub/
     VECTOR_MODEL_NAME: str = "shibing624/text2vec-base-chinese"  # 或本地路径，如 "/path/to/models/text2vec-base-chinese"
-    VECTOR_MODEL_PATH: str = ""  # 自定义向量模型路径，如果设置则优先使用此路径
+    VECTOR_MODEL_PATH: str = "/Users/guo/codes/aicity/model/models--shibing624--text2vec-base-chinese/snapshots/183bb99aa7af74355fb58d16edf8c13ae7c5433e"  # 自定义向量模型路径，如果设置则优先使用此路径
     VECTOR_DIMENSION: int = 768
     RERANK_MODEL_NAME: str = "BAAI/bge-reranker-large"  # 或本地路径，如 "/path/to/models/bge-reranker-large"
-    RERANK_MODEL_PATH: str = ""  # 自定义重排模型路径，如果设置则优先使用此路径
+    RERANK_MODEL_PATH: str = "/Users/guo/codes/aicity/model/models--BAAI--bge-reranker-large/snapshots/55611d7bca2a7133960a6d3b71e083071bbfc312"  # 自定义重排模型路径，如果设置则优先使用此路径
     
     # LLM (Aliyun DashScope / OpenAI compatible)
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL: str = "qwen-plus"
+    
+    # DeepSeek (Optional, if using separate provider)
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
     
     # JWT
     SECRET_KEY: str = "csj1234567890"

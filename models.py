@@ -96,3 +96,15 @@ class DictData(Base):
     sort_order = Column(Integer, default=0) # 排序号
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+
+class ModelComparisonVote(Base):
+    """模型比对投票记录表"""
+    __tablename__ = "model_comparison_votes"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    vote_time = Column(DateTime, default=datetime.utcnow, index=True)
+    username = Column(String, index=True)
+    query_content = Column(Text)
+    qwen_response = Column(Text)
+    deepseek_response = Column(Text)
+    winner = Column(Integer)  # 1 为 qwen-plus, 2 为 deepseek-v3.2
+    llm_messages = Column(JSONB) # 新增：存储当时比对时的上下文信息
