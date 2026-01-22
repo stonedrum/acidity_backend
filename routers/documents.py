@@ -51,7 +51,7 @@ async def upload_pdf(
         doc = Document(
             filename=file.filename, 
             oss_key=oss_key,
-            uploader=current_user,
+            uploader=current_user["username"],
             kb_type=kb_type
         )
         db.add(doc)
@@ -109,7 +109,7 @@ async def create_document_simple(
         doc = Document(
             filename=file.filename, 
             oss_key=oss_key,
-            uploader=current_user,
+            uploader=current_user["username"],
             kb_type=kb_type
         )
         db.add(doc)

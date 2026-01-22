@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 from ..database import get_db
-from ..models import Document, Clause, ChatQueryLog, ModelComparisonVote
+from ..models import Document, Clause, ChatQueryLog, ModelComparisonVote, DictType, DictData
 from ..schemas import (
     SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs,
     ComparisonVoteCreate, ComparisonVoteOut, PaginatedComparisonVotes, ComparisonStats
@@ -51,10 +51,61 @@ async def chat(
     model_name = request.model
     
     # 1. RAG
+    effective_kb_type = request.kb_type
+    intent_info = None
+    
+    # 如果用户没有指定知识库类型，进行意图识别
+    if not effective_kb_type:
+        try:
+            # 获取所有可用的知识库类型
+            stmt = (
+                select(DictData.value, DictData.label)
+                .join(DictType)
+                .where(DictType.type_name == "kb_type", DictData.is_active == True)
+            )
+            dict_res = await db.execute(stmt)
+            kb_types = dict_res.all()
+            
+            if kb_types:
+                type_desc = "\n".join([f"- {t.value} ({t.label})" for t in kb_types])
+                intent_prompt = f"""你是一个意图识别专家。请根据用户的问题，将其归类到最相关的知识库类型中。
+当前的知识库类型列表如下：
+{type_desc}
+
+用户问题：{request.message}
+
+任务：
+1. 从上述列表中选择一个最匹配的“知识库类型值”（即括号前的英文/标识符部分）。
+2. 如果没有任何类型匹配，请回复 "None"。
+3. 你的回复必须【仅包含】选中的类型值或 "None"，不要有任何其他文字。"""
+                
+                # 调用大模型进行意图识别（使用默认模型，非流式）
+                detected_type_raw = await llm_service.chat_completion(
+                    [{"role": "user", "content": intent_prompt}],
+                    model=None, # 使用系统默认模型
+                    stream=False
+                )
+                detected_type = detected_type_raw.strip()
+                
+                intent_info = {
+                    "prompt": intent_prompt,
+                    "response": detected_type_raw,
+                    "detected_type": detected_type
+                }
+                
+                # 验证识别出的类型是否在有效列表中
+                valid_values = [t.value for t in kb_types]
+                if detected_type in valid_values:
+                    effective_kb_type = detected_type
+                    print(f"[Intent] 自动识别知识库类型: {effective_kb_type}")
+        except Exception as e:
+            print(f"[Intent Error] 意图识别失败: {e}")
+            intent_info = {"error": str(e)}
+
     initial_results, reranked_results = await rag_service.search_and_rerank(
         request.message, 
         db, 
-        kb_type=request.kb_type,
+        kb_type=effective_kb_type,
         return_initial_results=True
     )
     
@@ -72,6 +123,7 @@ async def chat(
                 reranked_results=[],
                 llm_response=no_result_msg,
                 llm_messages=[{"role": "user", "content": request.message}], # 仅记录当前提问
+                intent_info=intent_info, # 记录意图识别详情
                 model_name=model_name,
                 query_duration_seconds=query_duration
             )
@@ -182,6 +234,7 @@ async def chat(
                         reranked_results=reranked_results,
                         llm_response=collected_content,
                         llm_messages=messages,  # 保存完整的消息列表
+                        intent_info=intent_info, # 记录意图识别详情
                         model_name=actual_model_name, # 使用解析后的实际模型名
                         query_duration_seconds=query_duration
                     )
@@ -209,6 +262,7 @@ async def chat(
                 reranked_results=reranked_results,
                 llm_response=response_content,
                 llm_messages=messages,  # 保存完整的消息列表
+                intent_info=intent_info, # 记录意图识别详情
                 model_name=actual_model_name, # 使用解析后的实际模型名
                 query_duration_seconds=query_duration
             )
@@ -260,7 +314,8 @@ async def get_chat_logs(
             initial_rag_results=log.initial_rag_results,
             reranked_results=log.reranked_results,
             llm_response=log.llm_response,
-            llm_messages=log.llm_messages, # 新增字段
+            llm_messages=log.llm_messages,
+            intent_info=log.intent_info, # 新增字段
             model_name=log.model_name,
             query_duration_seconds=log.query_duration_seconds
         ))

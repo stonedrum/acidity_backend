@@ -108,14 +108,6 @@ class LLMService:
             temperature=0.7,
             max_tokens=2000
         )
-
-        response = await client.chat.completions.create(
-            model=target_model,
-            messages=messages,
-            stream=stream,
-            temperature=0.7,
-            max_tokens=2000
-        )
         
         if stream:
             return self._stream_generator(response)

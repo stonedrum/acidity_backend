@@ -63,6 +63,7 @@ class ChatQueryLog(Base):
     # 最终从大模型返回的内容
     llm_response = Column(Text)  # LLM返回的完整内容
     llm_messages = Column(JSONB)  # 发送给 LLM 的完整消息列表（包含 system, history, user）
+    intent_info = Column(JSONB)  # 意图识别详细信息 (prompt, response, detected_type)
     model_name = Column(String)  # 调用的模型名称
     query_duration_seconds = Column(Float)  # 查询所花时间（秒）
 
