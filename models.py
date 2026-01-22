@@ -108,3 +108,12 @@ class ModelComparisonVote(Base):
     deepseek_response = Column(Text)
     winner = Column(Integer)  # 1 为 qwen-plus, 2 为 deepseek-v3.2
     llm_messages = Column(JSONB) # 新增：存储当时比对时的上下文信息
+
+class SystemConfig(Base):
+    """系统配置表"""
+    __tablename__ = "system_configs"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    config_key = Column(String, unique=True, index=True) # 如 "llm_api_key"
+    config_value = Column(Text)
+    description = Column(String)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

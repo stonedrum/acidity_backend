@@ -263,3 +263,14 @@ class ComparisonStats(BaseModel):
     total_votes: int
     qwen_wins: int
     deepseek_wins: int
+
+class SystemConfigOut(BaseModel):
+    config_key: str
+    config_value: str
+    description: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class SystemConfigUpdate(BaseModel):
+    config_value: str

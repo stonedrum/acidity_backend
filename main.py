@@ -13,9 +13,9 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['HF_DATASETS_OFFLINE'] = '1'
 
 from .database import init_db, AsyncSessionLocal
-from .models import Prompt, DictType, DictData
+from .models import Prompt, DictType, DictData, SystemConfig
 from .config import settings
-from .routers import auth, documents, clauses, chat, prompts, dicts, users
+from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs
 
 app = FastAPI(title="Standard Knowledge Base RAG")
 
@@ -116,6 +116,28 @@ async def startup_event():
             await db.commit()
             print("[INFO] 已初始化数据字典：kb_type")
 
+        # 3. 初始化系统配置 (LLM 相关)
+        default_configs = [
+            {"key": "llm_api_key", "value": settings.LLM_API_KEY, "desc": "模型 A (Qwen) API Key"},
+            {"key": "llm_base_url", "value": settings.LLM_BASE_URL, "desc": "模型 A (Qwen) API Base URL"},
+            {"key": "llm_model", "value": settings.LLM_MODEL, "desc": "模型 A (Qwen) 模型名称"},
+            {"key": "deepseek_api_key", "value": settings.DEEPSEEK_API_KEY, "desc": "模型 B (DeepSeek) API Key"},
+            {"key": "deepseek_base_url", "value": settings.DEEPSEEK_BASE_URL, "desc": "模型 B (DeepSeek) API Base URL"},
+            {"key": "deepseek_model", "value": "deepseek-v3", "desc": "模型 B (DeepSeek) 模型名称"},
+            {"key": "system_default_model", "value": "qwen", "desc": "系统默认对话模型"},
+        ]
+        
+        for cfg in default_configs:
+            stmt = select(SystemConfig).where(SystemConfig.config_key == cfg["key"])
+            res = await db.execute(stmt)
+            if not res.scalar_one_or_none():
+                db.add(SystemConfig(
+                    config_key=cfg["key"],
+                    config_value=cfg["value"],
+                    description=cfg["desc"]
+                ))
+        await db.commit()
+
 # 注册路由
 app.include_router(auth.router)
 app.include_router(documents.router)
@@ -124,6 +146,7 @@ app.include_router(chat.router)
 app.include_router(prompts.router)
 app.include_router(dicts.router)
 app.include_router(users.router)
+app.include_router(configs.router)
 
 if __name__ == "__main__":
     import uvicorn

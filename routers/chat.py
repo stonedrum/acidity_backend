@@ -47,7 +47,8 @@ async def chat(
 ):
     query_start_time = time.time()
     username = current_user["username"]
-    model_name = request.model or settings.LLM_MODEL
+    # 不再在这里强行回退到 settings.LLM_MODEL，交给 llm_service 动态判断
+    model_name = request.model
     
     # 1. RAG
     initial_results, reranked_results = await rag_service.search_and_rerank(
@@ -155,6 +156,9 @@ async def chat(
         async def stream_wrapper():
             collected_content = ""
             try:
+                # 使用统一的方法获取实际模型名
+                actual_model_name, _ = llm_service.get_actual_model_info(model_name)
+
                 stream = await llm_service.chat_completion(messages, model=model_name, stream=True)
                 async for chunk in stream:
                     collected_content += chunk
@@ -178,7 +182,7 @@ async def chat(
                         reranked_results=reranked_results,
                         llm_response=collected_content,
                         llm_messages=messages,  # 保存完整的消息列表
-                        model_name=model_name,
+                        model_name=actual_model_name, # 使用解析后的实际模型名
                         query_duration_seconds=query_duration
                     )
                     db.add(chat_log)
@@ -188,6 +192,9 @@ async def chat(
         return StreamingResponse(stream_wrapper(), media_type="text/plain; charset=utf-8")
     else:
         try:
+            # 使用统一的方法获取实际模型名
+            actual_model_name, _ = llm_service.get_actual_model_info(model_name)
+
             response_content = await llm_service.chat_completion(messages, model=model_name, stream=False)
             if reference_links:
                 has_reference_section = ("引用文件" in response_content or "📎" in response_content)
@@ -202,7 +209,7 @@ async def chat(
                 reranked_results=reranked_results,
                 llm_response=response_content,
                 llm_messages=messages,  # 保存完整的消息列表
-                model_name=model_name,
+                model_name=actual_model_name, # 使用解析后的实际模型名
                 query_duration_seconds=query_duration
             )
             db.add(chat_log)
