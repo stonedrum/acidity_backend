@@ -28,10 +28,10 @@ class Settings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_BASE_URL: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     LLM_MODEL: str = "qwen-plus"
-    
-    # DeepSeek (Optional, if using separate provider)
+
+    # DeepSeek Specific (optional, if using separate API)
     DEEPSEEK_API_KEY: str = ""
-    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     
     # JWT
     SECRET_KEY: str = "csj1234567890"

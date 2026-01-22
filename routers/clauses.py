@@ -9,7 +9,7 @@ from ..schemas import (
     ClauseOut, ClauseCreate, ClauseUpdate, PaginatedClauses, 
     ClauseBatchCreate, BatchInsertResult, ClauseBatchUpdate
 )
-from ..auth import get_current_user
+from ..auth import get_current_user, check_role
 from ..services.rag_service import rag_service
 
 router = APIRouter(tags=["条款管理"])
@@ -23,7 +23,7 @@ async def list_clauses(
     keyword: Optional[str] = None,
     is_verified: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """分页获取知识条款列表"""
     stmt = select(Clause)
@@ -80,7 +80,7 @@ async def list_clauses(
 async def create_clause(
     data: ClauseCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """手动创建知识条款"""
     embedding = rag_service.get_embedding(data.content)
@@ -117,7 +117,7 @@ async def create_clause(
 async def batch_create_clauses(
     data: ClauseBatchCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """批量导入知识条款"""
     if not data.items:
@@ -150,7 +150,7 @@ async def batch_create_clauses(
 async def batch_update_clauses(
     data: ClauseBatchUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """批量更新知识条款"""
     if not data.ids:
@@ -179,7 +179,7 @@ async def update_clause(
     clause_id: UUID,
     data: ClauseUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """更新知识条款"""
     stmt = select(Clause).where(Clause.id == clause_id)
@@ -226,7 +226,7 @@ async def update_clause(
 async def delete_clause(
     clause_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """删除知识条款"""
     stmt = select(Clause).where(Clause.id == clause_id)

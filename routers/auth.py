@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from ..database import get_db
 from ..models import User
 from ..schemas import UserCreate, UserLogin, Token
@@ -14,13 +14,24 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
     if db_user.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="Username already registered")
     
+    # 第一个注册的用户设为 sysadmin
+    count_stmt = select(func.count()).select_from(User)
+    count_res = await db.execute(count_stmt)
+    is_first = count_res.scalar() == 0
+    role = "sysadmin" if is_first else "user"
+    
     hashed_password = get_password_hash(user_data.password)
-    new_user = User(username=user_data.username, password_hash=hashed_password)
+    new_user = User(username=user_data.username, password_hash=hashed_password, role=role)
     db.add(new_user)
     await db.commit()
     
-    access_token = create_access_token(data={"sub": new_user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    access_token = create_access_token(data={"sub": new_user.username, "role": new_user.role})
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer", 
+        "role": new_user.role,
+        "username": new_user.username
+    }
 
 @router.post("/token", response_model=Token)
 async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
@@ -29,5 +40,10 @@ async def login(user_data: UserLogin, db: AsyncSession = Depends(get_db)):
     if not user or not verify_password(user_data.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Incorrect username or password")
     
-    access_token = create_access_token(data={"sub": user.username})
-    return {"access_token": access_token, "token_type": "bearer"}
+    access_token = create_access_token(data={"sub": user.username, "role": user.role})
+    return {
+        "access_token": access_token, 
+        "token_type": "bearer", 
+        "role": user.role,
+        "username": user.username
+    }

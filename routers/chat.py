@@ -11,7 +11,7 @@ from ..schemas import (
     SearchQuery, ClauseOut, ChatRequest, ChatQueryLogOut, PaginatedChatLogs,
     ComparisonVoteCreate, ComparisonVoteOut, PaginatedComparisonVotes, ComparisonStats
 )
-from ..auth import get_current_user
+from ..auth import get_current_user, check_role
 from ..services.rag_service import rag_service
 from ..services.llm_service import llm_service
 from ..services.oss_service import oss_service
@@ -43,10 +43,10 @@ async def search(query_data: SearchQuery, db: AsyncSession = Depends(get_db)):
 async def chat(
     request: ChatRequest, 
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     query_start_time = time.time()
-    username = current_user or "anonymous"
+    username = current_user["username"]
     model_name = request.model or settings.LLM_MODEL
     
     # 1. RAG
@@ -217,16 +217,21 @@ async def get_chat_logs(
     page_size: int = 15,
     username: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
+    # 如果是普通用户，只能看自己的日志
+    final_username = username
+    if current_user["role"] == "user":
+        final_username = current_user["username"]
+    
     query = select(ChatQueryLog)
-    if username:
-        query = query.where(ChatQueryLog.username == username)
+    if final_username:
+        query = query.where(ChatQueryLog.username == final_username)
     query = query.order_by(desc(ChatQueryLog.query_time))
     
     count_query = select(func.count()).select_from(ChatQueryLog)
-    if username:
-        count_query = count_query.where(ChatQueryLog.username == username)
+    if final_username:
+        count_query = count_query.where(ChatQueryLog.username == final_username)
     
     total_result = await db.execute(count_query)
     total = total_result.scalar()
@@ -265,21 +270,21 @@ async def get_chat_logs(
 async def save_comparison_vote(
     vote: ComparisonVoteCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user)
 ):
     # 尝试从最近的查询日志中恢复 llm_messages (如果前端没传)
     final_messages = vote.llm_messages
     if not final_messages:
         # 查找该用户最近一次针对该内容的查询日志
         stmt = select(ChatQueryLog.llm_messages).where(
-            ChatQueryLog.username == (current_user or "anonymous"),
+            ChatQueryLog.username == current_user["username"],
             ChatQueryLog.query_content == vote.query_content
         ).order_by(desc(ChatQueryLog.query_time)).limit(1)
         res = await db.execute(stmt)
         final_messages = res.scalar()
 
     new_vote = ModelComparisonVote(
-        username=current_user or "anonymous",
+        username=current_user["username"],
         query_content=vote.query_content,
         qwen_response=vote.qwen_response,
         deepseek_response=vote.deepseek_response,
@@ -295,7 +300,7 @@ async def get_comparison_votes(
     page: int = 1,
     page_size: int = 15,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     query = select(ModelComparisonVote).order_by(desc(ModelComparisonVote.vote_time))
     
@@ -321,7 +326,7 @@ async def get_comparison_votes(
 @router.get("/comparison/stats", response_model=ComparisonStats)
 async def get_comparison_stats(
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     # 总票数
     total_stmt = select(func.count()).select_from(ModelComparisonVote)

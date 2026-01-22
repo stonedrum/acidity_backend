@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 from ..database import get_db
 from ..models import Document, Clause
 from ..schemas import DocumentOut, DocumentUpdate, PaginatedDocuments
-from ..auth import get_current_user
+from ..auth import get_current_user, check_role
 from ..services.oss_service import oss_service
 from ..services.pdf_service import pdf_service
 from ..services.rag_service import rag_service
@@ -20,7 +20,7 @@ async def upload_pdf(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
     db: AsyncSession = Depends(get_db), 
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     # 1. Save locally temporarily
     temp_dir = "temp"
@@ -84,7 +84,7 @@ async def create_document_simple(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
     db: AsyncSession = Depends(get_db), 
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """仅上传文档并创建记录，不进行 RAG 解析"""
     # 1. 检查文件名是否重复
@@ -125,7 +125,7 @@ async def update_document(
     doc_id: uuid.UUID,
     data: DocumentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """更新文档信息"""
     stmt = select(Document).where(Document.id == doc_id)
@@ -168,7 +168,7 @@ async def list_documents(
     kb_type: Optional[str] = None,
     keyword: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """获取所有文档列表（支持模糊匹配文件名、按类型筛选、分页）"""
     stmt = select(Document)
@@ -211,7 +211,7 @@ async def list_documents(
 async def delete_document(
     doc_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
     """删除文档及其关联的所有条款"""
     stmt = select(Document).where(Document.id == doc_id)

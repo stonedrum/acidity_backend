@@ -7,14 +7,14 @@ from sqlalchemy import select
 from ..database import get_db
 from ..models import Prompt
 from ..schemas import PromptOut, PromptCreate, PromptUpdate
-from ..auth import get_current_user
+from ..auth import get_current_user, check_role
 
 router = APIRouter(tags=["提示词管理"])
 
 @router.get("/prompts", response_model=List[PromptOut])
 async def list_prompts(
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(Prompt).order_by(Prompt.name)
     result = await db.execute(stmt)
@@ -24,7 +24,7 @@ async def list_prompts(
 async def create_prompt(
     prompt_data: PromptCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(Prompt).where(Prompt.name == prompt_data.name)
     result = await db.execute(stmt)
@@ -47,7 +47,7 @@ async def update_prompt(
     prompt_id: UUID,
     prompt_data: PromptUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(Prompt).where(Prompt.id == prompt_id)
     result = await db.execute(stmt)
@@ -81,7 +81,7 @@ async def update_prompt(
 async def delete_prompt(
     prompt_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(Prompt).where(Prompt.id == prompt_id)
     result = await db.execute(stmt)

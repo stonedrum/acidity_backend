@@ -9,7 +9,7 @@ from ..schemas import (
     DictDataOut, DictTypeOut, DictTypeCreate, DictTypeUpdate,
     DictDataCreate, DictDataUpdate
 )
-from ..auth import get_current_user
+from ..auth import get_current_user, check_role
 
 router = APIRouter(tags=["数据字典"])
 
@@ -26,7 +26,7 @@ async def get_dict_by_type(type_name: str, db: AsyncSession = Depends(get_db)):
     return result.scalars().all()
 
 @router.get("/dict-types", response_model=List[DictTypeOut])
-async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: str = Depends(get_current_user)):
+async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: dict = Depends(check_role(["sysadmin"]))):
     """列出所有字典类型（管理端使用）"""
     stmt = select(DictType)
     result = await db.execute(stmt)
@@ -49,7 +49,7 @@ async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: str 
 async def create_dict_type(
     type_data: DictTypeCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictType).where(DictType.type_name == type_data.type_name)
     result = await db.execute(stmt)
@@ -67,7 +67,7 @@ async def update_dict_type(
     type_id: UUID,
     type_data: DictTypeUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictType).where(DictType.id == type_id)
     result = await db.execute(stmt)
@@ -96,7 +96,7 @@ async def update_dict_type(
 async def delete_dict_type(
     type_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictType).where(DictType.id == type_id)
     result = await db.execute(stmt)
@@ -116,7 +116,7 @@ async def create_dict_data(
     type_id: UUID,
     data_item: DictDataCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictType).where(DictType.id == type_id)
     result = await db.execute(stmt)
@@ -134,7 +134,7 @@ async def update_dict_data(
     data_id: UUID,
     data_item: DictDataUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictData).where(DictData.id == data_id)
     result = await db.execute(stmt)
@@ -153,7 +153,7 @@ async def update_dict_data(
 async def delete_dict_data(
     data_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: str = Depends(get_current_user)
+    current_user: dict = Depends(check_role(["sysadmin"]))
 ):
     stmt = select(DictData).where(DictData.id == data_id)
     result = await db.execute(stmt)

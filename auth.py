@@ -34,8 +34,19 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         username: str = payload.get("sub")
+        role: str = payload.get("role")
         if username is None:
             raise credentials_exception
+        return {"username": username, "role": role}
     except JWTError:
         raise credentials_exception
-    return username
+
+def check_role(allowed_roles: list):
+    async def role_checker(current_user: dict = Depends(get_current_user)):
+        if current_user["role"] not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You do not have enough permissions"
+            )
+        return current_user
+    return role_checker
