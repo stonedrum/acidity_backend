@@ -226,3 +226,103 @@ async def delete_document(
     await db.delete(doc)
     await db.commit()
     return {"message": "Document and associated clauses deleted"}
+
+@router.post("/documents/{doc_id}/import-markdown")
+async def import_markdown(
+    doc_id: uuid.UUID,
+    file: UploadFile = File(...),
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+):
+    """从 Markdown 文件导入知识条目，按二级标题拆分并处理超长内容"""
+    # 1. 获取文档信息
+    stmt = select(Document).where(Document.id == doc_id)
+    result = await db.execute(stmt)
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # 2. 读取并解析 Markdown
+    content = await file.read()
+    text = content.decode("utf-8")
+    
+    # 按二级标题拆分: ## 标题
+    import re
+    sections = re.split(r'\n(?=##\s)', "\n" + text)
+    
+    inserted_count = 0
+    for section in sections:
+        section = section.strip()
+        if not section:
+            continue
+            
+        # 提取标题和内容
+        lines = section.split('\n')
+        title = lines[0].replace('##', '').strip() if lines[0].startswith('##') else "未命名章节"
+        body = '\n'.join(lines[1:]).strip() if lines[0].startswith('##') else section
+        
+        if not body:
+            continue
+
+        # 拆分逻辑
+        chunks = []
+        if len(body) <= 1024 and '|' not in body: # 如果内容不多且没表格，直接存
+            chunks.append(body)
+        else:
+            # 超过 1024 字，或者包含表格，按段落/表格拆分并组合
+            paragraphs = re.split(r'\n\s*\n', body)
+            current_chunk = ""
+            
+            def is_table(p_text):
+                # 简单的表格判定：包含 | 且有类似 |---| 的分隔行
+                lines = p_text.strip().split('\n')
+                if len(lines) < 2:
+                    return False
+                has_pipe = any('|' in line for line in lines)
+                has_sep = any(re.match(r'^\s*\|?[:\s-]*\|[:\s-]*\|?[:\s-]*', line) for line in lines)
+                return has_pipe and has_sep
+
+            for p in paragraphs:
+                p = p.strip()
+                if not p:
+                    continue
+                
+                # 如果是表格，必须作为一个整体条目
+                if is_table(p):
+                    # 先结算之前的 chunk
+                    if current_chunk:
+                        chunks.append(current_chunk.strip())
+                        current_chunk = ""
+                    # 将表格独立作为一个 chunk
+                    chunks.append(p)
+                    continue
+
+                # 非表格按 512 字逻辑合并
+                if len(current_chunk) + len(p) > 512 and current_chunk:
+                    chunks.append(current_chunk.strip())
+                    current_chunk = p
+                else:
+                    if current_chunk:
+                        current_chunk += "\n\n" + p
+                    else:
+                        current_chunk = p
+            
+            if current_chunk:
+                chunks.append(current_chunk.strip())
+
+        # 3. 向量化并插入数据库
+        for chunk_text in chunks:
+            embedding = rag_service.get_embedding(chunk_text)
+            clause = Clause(
+                doc_id=doc.id,
+                kb_type=doc.kb_type,
+                chapter_path=title,
+                content=chunk_text,
+                embedding=embedding,
+                is_verified=True
+            )
+            db.add(clause)
+            inserted_count += 1
+            
+    await db.commit()
+    return {"status": "ok", "inserted": inserted_count}
