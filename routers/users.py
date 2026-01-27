@@ -30,6 +30,11 @@ async def change_my_password(
     await db.commit()
     return {"status": "ok", "message": "密码修改成功"}
 
+@router.get("/me", response_model=UserOut)
+async def get_my_info(current_user: dict = Depends(get_current_user)):
+    """获取当前用户信息（用于验证 token 有效性）"""
+    return current_user
+
 @router.get("/users", response_model=PaginatedUsers)
 async def list_users(
     page: int = 1,

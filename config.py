@@ -7,7 +7,7 @@ ENV_FILE = os.path.join(BASE_DIR, ".env")
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/aicity"
+    DATABASE_URL: str = "postgresql+asyncpg://guo:@localhost:5432/aicity"
     
     # Aliyun OSS
     OSS_ACCESS_KEY_ID: str = ""
