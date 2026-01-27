@@ -40,27 +40,31 @@ class RAGService:
         :param kb_type: 知识库类型过滤 (可选)
         :param return_initial_results: 是否返回初始向量匹配结果
         :return: 如果 return_initial_results=True，返回 (initial_results, reranked_results)
-                 否则只返回 reranked_results (Top 3)
+                 否则只返回 reranked_results
         """
         from ..models import Clause
         from sqlalchemy import select
         from pgvector.sqlalchemy import Vector
+        from .llm_service import llm_service
+        
+        # 确保 LLM 服务已初始化，以便获取最新配置
+        await llm_service._ensure_initialized()
+        
+        # 获取 RAG 配置
+        rag_config = llm_service.config_cache
+        init_rag_count = int(rag_config.get("initial_rag_count", 10))
+        init_rag_threshold = float(rag_config.get("initial_rag_threshold", 0.3))
+        rerank_count = int(rag_config.get("rerank_count", 3))
+        rerank_threshold = float(rag_config.get("rerank_threshold", 0.8))
         
         query_embedding = self.get_embedding(query)
         
         # 1. Vector Match (Initial Screening)
-        # We use cosine similarity (1 - <=> in pgvector)
-        # user wants similarity > 0.3, Top 10
         # pgvector <=> is cosine distance, so similarity = 1 - distance
-        # similarity > 0.3 means distance < 0.7
-        
-        # Filter by similarity > 0.3 in SQL (equivalent to distance < 0.7)
-        # In PostgreSQL: WHERE (1 - (embedding <=> query_embedding)) > 0.3
-        # Which is equivalent to: WHERE (embedding <=> query_embedding) < 0.7
-        distance_threshold = 0.7  # 1 - 0.3 = 0.7
+        # similarity > init_rag_threshold means distance < (1 - init_rag_threshold)
+        distance_threshold = 1.0 - init_rag_threshold
         
         # Filter candidates by cosine distance threshold in SQL
-        # pgvector's cosine_distance() can be used in WHERE clause
         stmt = (
             select(Clause)
             .where(
@@ -72,7 +76,7 @@ class RAGService:
         if kb_type:
             stmt = stmt.where(Clause.kb_type == kb_type)
             
-        stmt = stmt.order_by(Clause.embedding.cosine_distance(query_embedding)).limit(10)
+        stmt = stmt.order_by(Clause.embedding.cosine_distance(query_embedding)).limit(init_rag_count)
         
         result = await db_session.execute(stmt)
         candidates = result.scalars().all()
@@ -99,7 +103,6 @@ class RAGService:
             import numpy as np
             clause_embedding = np.array(c.embedding)
             query_emb = np.array(query_embedding)
-            # 计算余弦距离
             dot_product = np.dot(clause_embedding, query_emb)
             norm_clause = np.linalg.norm(clause_embedding)
             norm_query = np.linalg.norm(query_emb)
@@ -107,39 +110,43 @@ class RAGService:
             initial_results.append({
                 "clause_id": str(c.id),
                 "doc_id": str(c.doc_id),
-                "doc_name": doc_map.get(str(c.doc_id), "未知文档"),  # 添加文档名称
+                "doc_name": doc_map.get(str(c.doc_id), "未知文档"),
                 "chapter_path": c.chapter_path,
-                "content": c.content[:500],  # 只保存前500字符，避免过长
+                "content": c.content[:500],
                 "score": float(cosine_similarity)
             })
 
-        # 2. Rerank (Refining Top 3)
+        # 2. Rerank
         pairs = [[query, c.content] for c in candidates]
         scores = self.rerank_model.predict(pairs)
         
         # Sort candidates by rerank score
         ranked_results = sorted(zip(candidates, scores), key=lambda x: x[1], reverse=True)
         
-        # Top 3 and similarity score > 0.4
-        top3_results = [x for x in ranked_results if x[1] > 0.7]
-        if len(top3_results) > 3:
-            top3_results = ranked_results[:3]
+        # Filter by threshold and limit count
+        final_candidates_list = [x for x in ranked_results if x[1] > rerank_threshold]
+        if len(final_candidates_list) > rerank_count:
+            final_candidates_list = ranked_results[:rerank_count]
+        elif not final_candidates_list and len(ranked_results) > 0:
+            # 如果没有超过阈值的，但也得返回点东西（或者根据需求决定是否返回空）
+            # 这里我们遵循逻辑：如果没有超过阈值的，就返回空，除非用户另有要求
+            pass
 
         if return_initial_results:
             # 返回初始结果和重排结果
             reranked_data = []
-            for c, score in top3_results:
+            for c, score in final_candidates_list:
                 reranked_data.append({
                     "clause_id": str(c.id),
                     "doc_id": str(c.doc_id),
-                    "doc_name": doc_map.get(str(c.doc_id), "未知文档"),  # 添加文档名称
+                    "doc_name": doc_map.get(str(c.doc_id), "未知文档"),
                     "chapter_path": c.chapter_path,
-                    "content": c.content[:500],  # 只保存前500字符
+                    "content": c.content[:500],
                     "rerank_score": float(score)
                 })
             return initial_results, reranked_data
         
-        # 返回 Top 3（兼容原有接口）
-        return top3_results
+        # 返回重排结果（兼容原有接口）
+        return final_candidates_list
 
 rag_service = RAGService()

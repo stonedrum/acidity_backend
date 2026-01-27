@@ -37,11 +37,13 @@ async def update_config(
     await db.commit()
     await db.refresh(config)
     
-    # 动态刷新 LLM 服务的配置
+    # 动态刷新相关服务的配置
     llm_related_keys = [
         "llm_api_key", "llm_base_url", "llm_model",
         "deepseek_api_key", "deepseek_base_url", "deepseek_model",
-        "system_default_model"
+        "system_default_model",
+        "initial_rag_count", "initial_rag_threshold",
+        "rerank_count", "rerank_threshold"
     ]
     if config_key in llm_related_keys or config_key.startswith("llm_") or config_key.startswith("deepseek_"):
         await llm_service.refresh_configs(db)

@@ -37,6 +37,12 @@ class LLMService:
         deepseek_api_key = config_map.get("deepseek_api_key", settings.DEEPSEEK_API_KEY)
         deepseek_base_url = config_map.get("deepseek_base_url", settings.DEEPSEEK_BASE_URL)
 
+        # RAG 相关配置缓存（已经在 config_map 中，这里只是为了代码可读性）
+        # initial_rag_count = config_map.get("initial_rag_count", "10")
+        # initial_rag_threshold = config_map.get("initial_rag_threshold", "0.3")
+        # rerank_count = config_map.get("rerank_count", "3")
+        # rerank_threshold = config_map.get("rerank_threshold", "0.8")
+
         # 初始化/更新默认客户端 (Qwen)
         self.default_client = AsyncOpenAI(
             api_key=llm_api_key,

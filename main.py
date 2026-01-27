@@ -125,6 +125,11 @@ async def startup_event():
             {"key": "deepseek_base_url", "value": settings.DEEPSEEK_BASE_URL, "desc": "模型 B (DeepSeek) API Base URL"},
             {"key": "deepseek_model", "value": "deepseek-v3", "desc": "模型 B (DeepSeek) 模型名称"},
             {"key": "system_default_model", "value": "qwen", "desc": "系统默认对话模型"},
+            # RAG 相关配置
+            {"key": "initial_rag_count", "value": "10", "desc": "初始 RAG 结果返回条数"},
+            {"key": "initial_rag_threshold", "value": "0.3", "desc": "初始 RAG 结果返回阈值"},
+            {"key": "rerank_count", "value": "3", "desc": "重排结果条数"},
+            {"key": "rerank_threshold", "value": "0.8", "desc": "重排结果阈值"},
         ]
         
         for cfg in default_configs:
