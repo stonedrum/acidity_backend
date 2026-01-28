@@ -17,7 +17,12 @@ from .models import Prompt, DictType, DictData, SystemConfig
 from .config import settings
 from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs
 
-app = FastAPI(title="Standard Knowledge Base RAG")
+app = FastAPI(
+    title="Standard Knowledge Base RAG",
+    docs_url="/docs" if settings.SHOW_DOCS else None,
+    redoc_url="/redoc" if settings.SHOW_DOCS else None,
+    openapi_url="/openapi.json" if settings.SHOW_DOCS else None
+)
 
 # 跨域配置
 app.add_middleware(
