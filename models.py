@@ -32,6 +32,7 @@ class Clause(Base):
     kb_type = Column(String, index=True, comment="冗余存储知识库类型，用于快速搜索过滤")  # 冗余存储类型
     chapter_path = Column(String) # e.g. "第一章 > 第1.1节"
     content = Column(Text) # Markdown content
+    page_number = Column(Integer, nullable=True) # 所在页码
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
     is_verified = Column(Boolean, default=False)  # 是否已校验
 

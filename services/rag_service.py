@@ -112,6 +112,7 @@ class RAGService:
                 "doc_id": str(c.doc_id),
                 "doc_name": doc_map.get(str(c.doc_id), "未知文档"),
                 "chapter_path": c.chapter_path,
+                "page_number": c.page_number,
                 "content": c.content[:500],
                 "score": float(cosine_similarity)
             })
@@ -141,6 +142,7 @@ class RAGService:
                     "doc_id": str(c.doc_id),
                     "doc_name": doc_map.get(str(c.doc_id), "未知文档"),
                     "chapter_path": c.chapter_path,
+                    "page_number": c.page_number,
                     "content": c.content[:500],
                     "rerank_score": float(score)
                 })

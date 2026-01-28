@@ -55,6 +55,7 @@ class ClauseOut(BaseModel):
     kb_type: Optional[str] = None
     chapter_path: str
     content: str
+    page_number: Optional[int] = None
     is_verified: bool = False
     doc_id: Optional[UUID] = None
     doc_name: Optional[str] = None
@@ -70,11 +71,13 @@ class ClauseCreate(BaseModel):
     kb_type: str
     chapter_path: str
     content: str
+    page_number: Optional[int] = None
     doc_id: Optional[UUID] = None
 
 class ClauseBatchItem(BaseModel):
     chapter_path: str
     content: str
+    page_number: Optional[int] = None
 
 class ClauseBatchCreate(BaseModel):
     kb_type: str
@@ -88,6 +91,7 @@ class ClauseUpdate(BaseModel):
     kb_type: Optional[str] = None
     chapter_path: Optional[str] = None
     content: Optional[str] = None
+    page_number: Optional[int] = None
     is_verified: Optional[bool] = None
     doc_id: Optional[UUID] = None
 

@@ -158,32 +158,60 @@ async def chat(
             clause = clauses_map.get(cid)
             if clause:
                 doc_name = clause.document.filename if clause.document else "手动录入"
-                context += f"【参考资料{i+1}】(来自文档：{doc_name}) 章节路径：{clause.chapter_path}\n内容：{clause.content}\n\n"
+                page_info = f" 页码：{clause.page_number}" if clause.page_number else ""
+                context += f"【参考资料{i+1}】(来自文档：{doc_name}{page_info}) 章节路径：{clause.chapter_path}\n内容：{clause.content}\n\n"
                 if clause.doc_id:
                     referenced_doc_ids.add(clause.doc_id)
+                # 将页码存入有效条目中（用于生成下方引用链接）
+                item["page_number"] = clause.page_number
                 valid_reranked_items.append(item)
         
         # 更新重排结果为实际查到的有效条目（记录日志用）
         reranked_results = valid_reranked_items
 
-    referenced_docs = []
-    if referenced_doc_ids:
-        # 移除可能存在的 None
-        clean_doc_ids = [rid for rid in referenced_doc_ids if rid is not None]
-        if clean_doc_ids:
-            stmt = select(Document).where(Document.id.in_(clean_doc_ids))
-            result = await db.execute(stmt)
-            referenced_docs = result.scalars().all()
-    
+    # 构建去重后的引用链接（考虑页码）
     reference_links = ""
-    if referenced_docs:
-        # 过滤掉没有 oss_key 的文档（手动新增的文档可能没上传文件）
-        valid_docs = [d for d in referenced_docs if d.oss_key]
-        if valid_docs:
+    if valid_reranked_items:
+        # 获取所有文档详情
+        doc_ids = set(UUID(item["doc_id"]) if isinstance(item["doc_id"], str) else item["doc_id"] 
+                     for item in valid_reranked_items if item.get("doc_id"))
+        doc_details = {}
+        if doc_ids:
+            doc_stmt = select(Document).where(Document.id.in_(doc_ids))
+            doc_result = await db.execute(doc_stmt)
+            for d in doc_result.scalars().all():
+                if d.oss_key:
+                    doc_details[str(d.id)] = d
+
+        # 构建唯一的 (doc_id, page_number) 集合
+        unique_refs = set()
+        for item in valid_reranked_items:
+            did = str(item.get("doc_id"))
+            if did in doc_details:
+                unique_refs.add((did, item.get("page_number")))
+
+        if unique_refs:
+            # 排序：先按文件名，再按页码
+            sorted_refs = sorted(list(unique_refs), key=lambda x: (doc_details[x[0]].filename, x[1] or 0))
+            
             reference_links = "\n\n---\n**📎 引用文件：**\n"
-            for doc in valid_docs:
+            for did, pnum in sorted_refs:
+                doc = doc_details[did]
                 file_url = oss_service.get_file_url(doc.oss_key)
-                reference_links += f"- [{doc.filename}]({file_url})\n"
+                page_suffix = ""
+                display_name = doc.filename
+                
+                if pnum:
+                    page_suffix = f" 第 {pnum} 页"
+                    display_name += f" (第 {pnum} 页)"
+                    # 如果是 PDF，添加 #page=N 参数
+                    if doc.filename.lower().endswith(".pdf"):
+                        # 处理 URL 可能已经包含参数的情况
+                        connector = "&" if "?" in file_url else "?"
+                        # 但实际上 #page=N 应该是在最后
+                        file_url += f"#page={pnum}"
+                
+                reference_links += f"- [{display_name}]({file_url})\n"
     
     # 2. Prepare Prompt
     default_system_template = """你是市政设施运维专家，精通结构健康监测、病害诊断、养护修复、应急处置及行业规范。请基于市政设施全生命周期运维经验，用专业、简洁的语言解答道桥隧巡检、维修、管理相关问题。

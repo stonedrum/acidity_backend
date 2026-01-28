@@ -69,6 +69,7 @@ async def list_clauses(
                 kb_type=c.kb_type,
                 chapter_path=c.chapter_path,
                 content=c.content,
+                page_number=c.page_number,
                 is_verified=c.is_verified,
                 doc_id=c.doc_id,
                 doc_name=doc_map.get(c.doc_id, "手动新增")
@@ -88,6 +89,7 @@ async def create_clause(
         kb_type=data.kb_type,
         chapter_path=data.chapter_path,
         content=data.content,
+        page_number=data.page_number,
         doc_id=data.doc_id,
         embedding=embedding,
         is_verified=True # 手动创建的默认为已校验
@@ -108,6 +110,7 @@ async def create_clause(
         kb_type=new_clause.kb_type,
         chapter_path=new_clause.chapter_path,
         content=new_clause.content,
+        page_number=new_clause.page_number,
         is_verified=new_clause.is_verified,
         doc_id=new_clause.doc_id,
         doc_name=doc_name
@@ -123,16 +126,23 @@ async def batch_create_clauses(
     if not data.items:
         raise HTTPException(status_code=400, detail="Items cannot be empty")
 
+    # 调试：打印接收到的第一条数据
+    print(f"[Batch Debug] First item received: {data.items[0].dict()}")
+
     new_clauses: List[Clause] = []
-    for item in data.items:
+    print(f"[Batch Import] Received {len(data.items)} items")
+    for i, item in enumerate(data.items):
         if not item.content:
             continue
+        if i < 5:  # 只打印前5条用于调试
+            print(f"[Batch Import] Item {i}: page_number={item.page_number}, chapter={item.chapter_path[:20]}")
         embedding = rag_service.get_embedding(item.content)
         new_clauses.append(
             Clause(
                 kb_type=data.kb_type,
                 chapter_path=item.chapter_path,
                 content=item.content,
+                page_number=item.page_number,
                 doc_id=data.doc_id,
                 embedding=embedding,
                 is_verified=True
@@ -197,6 +207,8 @@ async def update_clause(
         clause.kb_type = data.kb_type
     if data.chapter_path is not None:
         clause.chapter_path = data.chapter_path
+    if data.page_number is not None:
+        clause.page_number = data.page_number
     if data.is_verified is not None:
         clause.is_verified = data.is_verified
     if data.doc_id is not None:
@@ -217,6 +229,7 @@ async def update_clause(
         kb_type=clause.kb_type,
         chapter_path=clause.chapter_path,
         content=clause.content,
+        page_number=clause.page_number,
         is_verified=clause.is_verified,
         doc_id=clause.doc_id,
         doc_name=doc_name
