@@ -15,7 +15,7 @@ os.environ['HF_DATASETS_OFFLINE'] = '1'
 from .database import init_db, AsyncSessionLocal
 from .models import Prompt, DictType, DictData, SystemConfig
 from .config import settings
-from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs
+from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs, regions
 
 app = FastAPI(
     title="Standard Knowledge Base RAG",
@@ -157,6 +157,7 @@ app.include_router(prompts.router)
 app.include_router(dicts.router)
 app.include_router(users.router)
 app.include_router(configs.router)
+app.include_router(regions.router)
 
 if __name__ == "__main__":
     import uvicorn

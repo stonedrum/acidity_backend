@@ -22,6 +22,9 @@ class Document(Base):
     uploader = Column(String)  # 上传用户名
     kb_type = Column(String, index=True, comment="知识库类型：桥梁、道路、隧道等")  # 增加知识库类型
     upload_time = Column(DateTime, default=datetime.utcnow)
+    region_level = Column(String, comment="区域范围：全国，省级，市级")
+    province = Column(String, nullable=True)
+    city = Column(String, nullable=True)
     
     clauses = relationship("Clause", back_populates="document", cascade="all, delete-orphan")
 
@@ -40,6 +43,9 @@ class Clause(Base):
     updated_by = Column(String) # 修改人
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
     is_verified = Column(Boolean, default=False)  # 是否已校验
+    region_level = Column(String, comment="区域范围：全国，省级，市级")
+    province = Column(String, nullable=True)
+    city = Column(String, nullable=True)
 
     document = relationship("Document", back_populates="clauses")
 
@@ -124,3 +130,13 @@ class SystemConfig(Base):
     config_value = Column(Text)
     description = Column(String)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+class Region(Base):
+    """行政区域表"""
+    __tablename__ = "regions"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, index=True)
+    parent_id = Column(Integer, ForeignKey("regions.id"), nullable=True)
+    level = Column(Integer, comment="1: 省/直辖市, 2: 地级市")
+    
+    parent = relationship("Region", remote_side=[id], backref="children")

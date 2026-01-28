@@ -19,10 +19,13 @@ router = APIRouter(tags=["文档管理"])
 async def upload_pdf(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
+    region_level: Optional[str] = Form(None),
+    province: Optional[str] = Form(None),
+    city: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db), 
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
-    # ... (no changes in logic here, uploader is already set to current_user["username"])
+    # ...
     # 1. Save locally temporarily
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
@@ -53,7 +56,10 @@ async def upload_pdf(
             filename=file.filename, 
             oss_key=oss_key,
             uploader=current_user["username"],
-            kb_type=kb_type
+            kb_type=kb_type,
+            region_level=region_level,
+            province=province,
+            city=city
         )
         db.add(doc)
         await db.flush()
@@ -73,7 +79,10 @@ async def upload_pdf(
                 creator=current_user["username"],
                 import_method="pdf 导入",
                 embedding=embedding,
-                is_verified=False # PDF 自动导入的设为未校验
+                is_verified=False, # PDF 自动导入的设为未校验
+                region_level=region_level,
+                province=province,
+                city=city
             )
             db.add(clause)
         
@@ -89,10 +98,14 @@ async def create_document_simple(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
     auto_import: bool = Form(False),
+    region_level: Optional[str] = Form(None),
+    province: Optional[str] = Form(None),
+    city: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db), 
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """上传文档并创建记录，可选是否进行 RAG 解析"""
+    print(f"[Debug] create_document_simple received: region_level={region_level}, province={province}, city={city}")
     # 1. 检查文件名是否重复
     existing_doc = await db.execute(select(Document).where(Document.filename == file.filename))
     if existing_doc.scalar_one_or_none():
@@ -116,7 +129,10 @@ async def create_document_simple(
             filename=file.filename, 
             oss_key=oss_key,
             uploader=current_user["username"],
-            kb_type=kb_type
+            kb_type=kb_type,
+            region_level=region_level,
+            province=province,
+            city=city
         )
         db.add(doc)
         await db.flush() # 获取 doc.id
@@ -137,7 +153,10 @@ async def create_document_simple(
                         creator=current_user["username"],
                         import_method="pdf 导入",
                         embedding=embedding,
-                        is_verified=False # PDF 自动导入的设为未校验
+                        is_verified=False, # PDF 自动导入的设为未校验
+                        region_level=region_level,
+                        province=province,
+                        city=city
                     )
                     db.add(clause)
                     inserted_count += 1
@@ -153,7 +172,10 @@ async def create_document_simple(
             "filename": doc.filename,
             "kb_type": doc.kb_type,
             "auto_import": auto_import,
-            "inserted_clauses": inserted_count
+            "inserted_clauses": inserted_count,
+            "region_level": region_level,
+            "province": province,
+            "city": city
         }
         return res
     finally:
@@ -194,6 +216,21 @@ async def update_document(
             update(Clause).where(Clause.doc_id == doc_id).values(kb_type=data.kb_type)
         )
         
+    if data.region_level is not None or data.province is not None or data.city is not None:
+        if data.region_level is not None: doc.region_level = data.region_level
+        if data.province is not None: doc.province = data.province
+        if data.city is not None: doc.city = data.city
+        
+        # 同步更新关联的条款
+        from sqlalchemy import update
+        await db.execute(
+            update(Clause).where(Clause.doc_id == doc_id).values(
+                region_level=doc.region_level,
+                province=doc.province,
+                city=doc.city
+            )
+        )
+        
     await db.commit()
     await db.refresh(doc)
     return DocumentOut(
@@ -202,7 +239,10 @@ async def update_document(
         uploader=doc.uploader,
         kb_type=doc.kb_type,
         upload_time=doc.upload_time,
-        file_url=oss_service.get_file_url(doc.oss_key) if doc.oss_key else None
+        file_url=oss_service.get_file_url(doc.oss_key) if doc.oss_key else None,
+        region_level=doc.region_level,
+        province=doc.province,
+        city=doc.city
     )
 
 @router.get("/documents", response_model=PaginatedDocuments)
@@ -244,7 +284,10 @@ async def list_documents(
             uploader=d.uploader,
             kb_type=d.kb_type,
             upload_time=d.upload_time,
-            file_url=oss_service.get_file_url(d.oss_key) if d.oss_key else None
+            file_url=oss_service.get_file_url(d.oss_key) if d.oss_key else None,
+            region_level=d.region_level,
+            province=d.province,
+            city=d.city
         ) for d in docs
     ]
     
@@ -378,7 +421,10 @@ async def import_markdown(
                 creator=current_user["username"],
                 import_method="markdown 录入",
                 embedding=embedding,
-                is_verified=False # Markdown 导入的设为未校验
+                is_verified=False, # Markdown 导入的设为未校验
+                region_level=doc.region_level,
+                province=doc.province,
+                city=doc.city
             )
             db.add(clause)
             inserted_count += 1

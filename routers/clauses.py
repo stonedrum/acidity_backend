@@ -86,7 +86,10 @@ async def list_clauses(
                 import_method=c.import_method,
                 created_at=c.created_at,
                 updated_at=c.updated_at,
-                updated_by=c.updated_by
+                updated_by=c.updated_by,
+                region_level=c.region_level,
+                province=c.province,
+                city=c.city
             ) for c in clauses
         ]
     )
@@ -98,6 +101,17 @@ async def create_clause(
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """手动创建知识条款"""
+    # 获取文档信息以同步区域信息
+    region_info = {"region_level": "全国", "province": None, "city": None}
+    if data.doc_id:
+        doc_stmt = select(Document).where(Document.id == data.doc_id)
+        doc_res = await db.execute(doc_stmt)
+        doc = doc_res.scalar_one_or_none()
+        if doc:
+            region_info["region_level"] = doc.region_level
+            region_info["province"] = doc.province
+            region_info["city"] = doc.city
+
     embedding = rag_service.get_embedding(data.content)
     new_clause = Clause(
         kb_type=data.kb_type,
@@ -108,7 +122,8 @@ async def create_clause(
         import_method="单条录入",
         doc_id=data.doc_id,
         embedding=embedding,
-        is_verified=True # 手动创建的默认为已校验
+        is_verified=True, # 手动创建的默认为已校验
+        **region_info
     )
     db.add(new_clause)
     await db.commit()
@@ -133,7 +148,10 @@ async def create_clause(
         creator=new_clause.creator,
         import_method=new_clause.import_method,
         created_at=new_clause.created_at,
-        updated_at=new_clause.updated_at
+        updated_at=new_clause.updated_at,
+        region_level=new_clause.region_level,
+        province=new_clause.province,
+        city=new_clause.city
     )
 
 @router.post("/clauses/batch", response_model=BatchInsertResult)
@@ -146,13 +164,19 @@ async def batch_create_clauses(
     if not data.items:
         raise HTTPException(status_code=400, detail="Items cannot be empty")
 
-    # 信息录入员只能导入到自己的文档
-    if current_user["role"] == "editor" and data.doc_id:
+    # 获取文档信息以同步区域信息
+    region_info = {"region_level": "全国", "province": None, "city": None}
+    if data.doc_id:
         doc_stmt = select(Document).where(Document.id == data.doc_id)
         doc_res = await db.execute(doc_stmt)
         doc = doc_res.scalar_one_or_none()
-        if not doc or doc.uploader != current_user["username"]:
-            raise HTTPException(status_code=403, detail="You can only import to your own documents")
+        if doc:
+            # 信息录入员权限检查
+            if current_user["role"] == "editor" and doc.uploader != current_user["username"]:
+                raise HTTPException(status_code=403, detail="You can only import to your own documents")
+            region_info["region_level"] = doc.region_level
+            region_info["province"] = doc.province
+            region_info["city"] = doc.city
 
     # 调试：打印接收到的第一条数据
     print(f"[Batch Debug] First item received: {data.items[0].dict()}")
@@ -175,7 +199,8 @@ async def batch_create_clauses(
                 import_method="json 录入",
                 doc_id=data.doc_id,
                 embedding=embedding,
-                is_verified=True
+                is_verified=True,
+                **region_info
             )
         )
 
@@ -214,6 +239,14 @@ async def batch_update_clauses(
             clause.kb_type = data.kb_type
         if data.doc_id is not None:
             clause.doc_id = data.doc_id
+            # 同步文档区域信息
+            doc_stmt = select(Document).where(Document.id == data.doc_id)
+            doc_res = await db.execute(doc_stmt)
+            doc = doc_res.scalar_one_or_none()
+            if doc:
+                clause.region_level = doc.region_level
+                clause.province = doc.province
+                clause.city = doc.city
         if data.is_verified is not None:
             clause.is_verified = data.is_verified
             
@@ -255,6 +288,14 @@ async def update_clause(
         clause.is_verified = data.is_verified
     if data.doc_id is not None:
         clause.doc_id = data.doc_id
+        # 同步文档区域信息
+        doc_stmt = select(Document).where(Document.id == data.doc_id)
+        doc_res = await db.execute(doc_stmt)
+        doc = doc_res.scalar_one_or_none()
+        if doc:
+            clause.region_level = doc.region_level
+            clause.province = doc.province
+            clause.city = doc.city
         
     await db.commit()
     await db.refresh(clause)
@@ -279,7 +320,10 @@ async def update_clause(
         import_method=clause.import_method,
         created_at=clause.created_at,
         updated_at=clause.updated_at,
-        updated_by=clause.updated_by
+        updated_by=clause.updated_by,
+        region_level=clause.region_level,
+        province=clause.province,
+        city=clause.city
     )
 
 @router.delete("/clauses/{clause_id}")

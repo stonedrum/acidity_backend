@@ -65,6 +65,9 @@ class ClauseOut(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     updated_by: Optional[str] = None
+    region_level: Optional[str] = None
+    province: Optional[str] = None
+    city: Optional[str] = None
 
 class SearchQuery(BaseModel):
     query: str
@@ -106,6 +109,7 @@ class ClauseBatchUpdate(BaseModel):
     doc_id: Optional[UUID] = None
     is_verified: Optional[bool] = None
 
+
 class PaginatedClauses(BaseModel):
     total: int
     page: int
@@ -120,6 +124,9 @@ class DocumentOut(BaseModel):
     kb_type: Optional[str] = None
     upload_time: datetime
     file_url: Optional[str] = None
+    region_level: Optional[str] = None
+    province: Optional[str] = None
+    city: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -135,10 +142,16 @@ class DocumentCreate(BaseModel):
     filename: str
     kb_type: str
     oss_key: Optional[str] = None
+    region_level: Optional[str] = None
+    province: Optional[str] = None
+    city: Optional[str] = None
 
 class DocumentUpdate(BaseModel):
     filename: Optional[str] = None
     kb_type: Optional[str] = None
+    region_level: Optional[str] = None
+    province: Optional[str] = None
+    city: Optional[str] = None
 
 class ChatMessage(BaseModel):
     role: str
@@ -284,3 +297,12 @@ class SystemConfigOut(BaseModel):
 
 class SystemConfigUpdate(BaseModel):
     config_value: str
+
+class RegionOut(BaseModel):
+    id: int
+    name: str
+    parent_id: Optional[int] = None
+    level: int
+
+    class Config:
+        from_attributes = True
