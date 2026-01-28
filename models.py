@@ -33,6 +33,11 @@ class Clause(Base):
     chapter_path = Column(String) # e.g. "第一章 > 第1.1节"
     content = Column(Text) # Markdown content
     page_number = Column(Integer, nullable=True) # 所在页码
+    creator = Column(String, index=True) # 录入人/创建人
+    import_method = Column(String, comment="录入方式：pdf 导入，markdown 录入，json 录入，单条录入")
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_by = Column(String) # 修改人
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
     is_verified = Column(Boolean, default=False)  # 是否已校验
 

@@ -60,6 +60,11 @@ class ClauseOut(BaseModel):
     doc_id: Optional[UUID] = None
     doc_name: Optional[str] = None
     score: Optional[float] = None
+    creator: Optional[str] = None
+    import_method: Optional[str] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    updated_by: Optional[str] = None
 
 class SearchQuery(BaseModel):
     query: str

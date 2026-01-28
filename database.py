@@ -17,8 +17,14 @@ async def init_db():
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
         
-        # 兼容性处理：如果 clauses 表没有 page_number 字段，则添加
+        # 兼容性处理：如果 clauses 表没有相应字段，则添加
         try:
             await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS page_number INTEGER"))
+            await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS creator VARCHAR"))
+            await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS import_method VARCHAR"))
+            await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+            await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+            await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS updated_by VARCHAR"))
+            await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_clauses_creator ON clauses (creator)"))
         except Exception as e:
-            print(f"[init_db] 尝试添加 page_number 字段失败 (可能已存在): {e}")
+            print(f"[init_db] 尝试添加字段失败: {e}")

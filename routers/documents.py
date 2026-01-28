@@ -20,8 +20,9 @@ async def upload_pdf(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
     db: AsyncSession = Depends(get_db), 
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
+    # ... (no changes in logic here, uploader is already set to current_user["username"])
     # 1. Save locally temporarily
     temp_dir = "temp"
     os.makedirs(temp_dir, exist_ok=True)
@@ -69,8 +70,10 @@ async def upload_pdf(
                 chapter_path=item["chapter_path"],
                 content=item["content"],
                 page_number=item.get("page_number"),
+                creator=current_user["username"],
+                import_method="pdf 导入",
                 embedding=embedding,
-                is_verified=True
+                is_verified=False # PDF 自动导入的设为未校验
             )
             db.add(clause)
         
@@ -87,7 +90,7 @@ async def create_document_simple(
     kb_type: str = Form(...),
     auto_import: bool = Form(False),
     db: AsyncSession = Depends(get_db), 
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """上传文档并创建记录，可选是否进行 RAG 解析"""
     # 1. 检查文件名是否重复
@@ -131,8 +134,10 @@ async def create_document_simple(
                         chapter_path=item["chapter_path"],
                         content=item["content"],
                         page_number=item.get("page_number"),
+                        creator=current_user["username"],
+                        import_method="pdf 导入",
                         embedding=embedding,
-                        is_verified=True # 自动导入的默认设为已校验
+                        is_verified=False # PDF 自动导入的设为未校验
                     )
                     db.add(clause)
                     inserted_count += 1
@@ -160,7 +165,7 @@ async def update_document(
     doc_id: uuid.UUID,
     data: DocumentUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """更新文档信息"""
     stmt = select(Document).where(Document.id == doc_id)
@@ -168,6 +173,10 @@ async def update_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # 信息录入员只能编辑自己的文档
+    if current_user["role"] == "editor" and doc.uploader != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only update your own documents")
     
     if data.filename is not None:
         # 检查新文件名是否与其他文档冲突
@@ -203,10 +212,15 @@ async def list_documents(
     kb_type: Optional[str] = None,
     keyword: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """获取所有文档列表（支持模糊匹配文件名、按类型筛选、分页）"""
     stmt = select(Document)
+    
+    # 信息录入员只看自己的
+    if current_user["role"] == "editor":
+        stmt = stmt.where(Document.uploader == current_user["username"])
+        
     if kb_type:
         stmt = stmt.where(Document.kb_type == kb_type)
     if keyword:
@@ -246,7 +260,7 @@ async def list_documents(
 async def delete_document(
     doc_id: uuid.UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """删除文档及其关联的所有条款"""
     stmt = select(Document).where(Document.id == doc_id)
@@ -254,6 +268,10 @@ async def delete_document(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    
+    # 信息录入员只能删除自己的
+    if current_user["role"] == "editor" and doc.uploader != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only delete your own documents")
     
     # 删除 OSS 文件（可选，如果需要同步删除）
     # oss_service.delete_file(doc.oss_key)
@@ -267,7 +285,7 @@ async def import_markdown(
     doc_id: uuid.UUID,
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """从 Markdown 文件导入知识条目，按二级标题拆分并处理超长内容"""
     # 1. 获取文档信息
@@ -276,6 +294,10 @@ async def import_markdown(
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+
+    # 信息录入员只能导入到自己的文档
+    if current_user["role"] == "editor" and doc.uploader != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only import to your own documents")
 
     # 2. 读取并解析 Markdown
     content = await file.read()
@@ -353,8 +375,10 @@ async def import_markdown(
                 kb_type=doc.kb_type,
                 chapter_path=title,
                 content=chunk_text,
+                creator=current_user["username"],
+                import_method="markdown 录入",
                 embedding=embedding,
-                is_verified=True
+                is_verified=False # Markdown 导入的设为未校验
             )
             db.add(clause)
             inserted_count += 1

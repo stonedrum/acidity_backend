@@ -64,10 +64,11 @@ class RAGService:
         # similarity > init_rag_threshold means distance < (1 - init_rag_threshold)
         distance_threshold = 1.0 - init_rag_threshold
         
-        # Filter candidates by cosine distance threshold in SQL
+        # Filter candidates by cosine distance threshold and verification status in SQL
         stmt = (
             select(Clause)
             .where(
+                Clause.is_verified == True,
                 Clause.embedding.cosine_distance(query_embedding) < distance_threshold
             )
         )

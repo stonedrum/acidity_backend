@@ -23,10 +23,15 @@ async def list_clauses(
     keyword: Optional[str] = None,
     is_verified: Optional[bool] = None,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """分页获取知识条款列表"""
     stmt = select(Clause)
+    
+    # 信息录入员只能看到自己的或者自己所属文档的
+    if current_user["role"] == "editor":
+        stmt = stmt.where(Clause.creator == current_user["username"])
+
     if kb_type:
         stmt = stmt.where(Clause.kb_type == kb_type)
     if doc_id:
@@ -42,9 +47,13 @@ async def list_clauses(
     total = total_res.scalar()
     
     # 分页排序
-    stmt = stmt.order_by(
-        Clause.is_verified.asc(), 
-        Clause.chapter_path.asc(), 
+    # 逻辑：优先按文档的上传时间倒序（确保新上传的文档条目在最前），
+    # 然后同一个文档内按页码正序，最后按创建时间倒序
+    stmt = stmt.outerjoin(Document, Clause.doc_id == Document.id).order_by(
+        Document.upload_time.desc(),
+        Clause.doc_id.asc(),
+        Clause.page_number.asc(),
+        Clause.created_at.desc(),
         Clause.id.asc()
     ).offset((page - 1) * page_size).limit(page_size)
     result = await db.execute(stmt)
@@ -72,7 +81,12 @@ async def list_clauses(
                 page_number=c.page_number,
                 is_verified=c.is_verified,
                 doc_id=c.doc_id,
-                doc_name=doc_map.get(c.doc_id, "手动新增")
+                doc_name=doc_map.get(c.doc_id, "手动新增"),
+                creator=c.creator,
+                import_method=c.import_method,
+                created_at=c.created_at,
+                updated_at=c.updated_at,
+                updated_by=c.updated_by
             ) for c in clauses
         ]
     )
@@ -81,7 +95,7 @@ async def list_clauses(
 async def create_clause(
     data: ClauseCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """手动创建知识条款"""
     embedding = rag_service.get_embedding(data.content)
@@ -90,6 +104,8 @@ async def create_clause(
         chapter_path=data.chapter_path,
         content=data.content,
         page_number=data.page_number,
+        creator=current_user["username"],
+        import_method="单条录入",
         doc_id=data.doc_id,
         embedding=embedding,
         is_verified=True # 手动创建的默认为已校验
@@ -113,18 +129,30 @@ async def create_clause(
         page_number=new_clause.page_number,
         is_verified=new_clause.is_verified,
         doc_id=new_clause.doc_id,
-        doc_name=doc_name
+        doc_name=doc_name,
+        creator=new_clause.creator,
+        import_method=new_clause.import_method,
+        created_at=new_clause.created_at,
+        updated_at=new_clause.updated_at
     )
 
 @router.post("/clauses/batch", response_model=BatchInsertResult)
 async def batch_create_clauses(
     data: ClauseBatchCreate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """批量导入知识条款"""
     if not data.items:
         raise HTTPException(status_code=400, detail="Items cannot be empty")
+
+    # 信息录入员只能导入到自己的文档
+    if current_user["role"] == "editor" and data.doc_id:
+        doc_stmt = select(Document).where(Document.id == data.doc_id)
+        doc_res = await db.execute(doc_stmt)
+        doc = doc_res.scalar_one_or_none()
+        if not doc or doc.uploader != current_user["username"]:
+            raise HTTPException(status_code=403, detail="You can only import to your own documents")
 
     # 调试：打印接收到的第一条数据
     print(f"[Batch Debug] First item received: {data.items[0].dict()}")
@@ -143,6 +171,8 @@ async def batch_create_clauses(
                 chapter_path=item.chapter_path,
                 content=item.content,
                 page_number=item.page_number,
+                creator=current_user["username"],
+                import_method="json 录入",
                 doc_id=data.doc_id,
                 embedding=embedding,
                 is_verified=True
@@ -160,7 +190,7 @@ async def batch_create_clauses(
 async def batch_update_clauses(
     data: ClauseBatchUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """批量更新知识条款"""
     if not data.ids:
@@ -173,6 +203,12 @@ async def batch_update_clauses(
     if not clauses:
         raise HTTPException(status_code=404, detail="No clauses found for given IDs")
     
+    # 信息录入员只能更新自己的
+    if current_user["role"] == "editor":
+        for c in clauses:
+            if c.creator != current_user["username"]:
+                raise HTTPException(status_code=403, detail="You can only update your own clauses")
+
     for clause in clauses:
         if data.kb_type is not None:
             clause.kb_type = data.kb_type
@@ -189,7 +225,7 @@ async def update_clause(
     clause_id: UUID,
     data: ClauseUpdate,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """更新知识条款"""
     stmt = select(Clause).where(Clause.id == clause_id)
@@ -198,6 +234,12 @@ async def update_clause(
     if not clause:
         raise HTTPException(status_code=404, detail="Clause not found")
     
+    # 信息录入员只能更新自己的
+    if current_user["role"] == "editor" and clause.creator != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only update your own clauses")
+
+    clause.updated_by = current_user["username"]
+
     # 如果修改了内容，需要重新生成向量
     if data.content is not None and data.content != clause.content:
         clause.embedding = rag_service.get_embedding(data.content)
@@ -232,14 +274,19 @@ async def update_clause(
         page_number=clause.page_number,
         is_verified=clause.is_verified,
         doc_id=clause.doc_id,
-        doc_name=doc_name
+        doc_name=doc_name,
+        creator=clause.creator,
+        import_method=clause.import_method,
+        created_at=clause.created_at,
+        updated_at=clause.updated_at,
+        updated_by=clause.updated_by
     )
 
 @router.delete("/clauses/{clause_id}")
 async def delete_clause(
     clause_id: UUID,
     db: AsyncSession = Depends(get_db),
-    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
     """删除知识条款"""
     stmt = select(Clause).where(Clause.id == clause_id)
@@ -248,6 +295,10 @@ async def delete_clause(
     if not clause:
         raise HTTPException(status_code=404, detail="Clause not found")
         
+    # 信息录入员只能删除自己的
+    if current_user["role"] == "editor" and clause.creator != current_user["username"]:
+        raise HTTPException(status_code=403, detail="You can only delete your own clauses")
+
     await db.delete(clause)
     await db.commit()
     return {"message": "Clause deleted"}
