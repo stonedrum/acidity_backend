@@ -45,7 +45,8 @@ class PDFService:
             # Here we treat each page or large block as a clause for simplicity
             clauses.append({
                 "chapter_path": current_chapter,
-                "content": full_content
+                "content": full_content,
+                "page_number": page_num + 1  # 1-based page number
             })
             
         return clauses

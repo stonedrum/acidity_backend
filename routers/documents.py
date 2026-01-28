@@ -68,7 +68,9 @@ async def upload_pdf(
                 kb_type=kb_type,
                 chapter_path=item["chapter_path"],
                 content=item["content"],
-                embedding=embedding
+                page_number=item.get("page_number"),
+                embedding=embedding,
+                is_verified=True
             )
             db.add(clause)
         
@@ -83,10 +85,11 @@ async def upload_pdf(
 async def create_document_simple(
     file: UploadFile = File(...), 
     kb_type: str = Form(...),
+    auto_import: bool = Form(False),
     db: AsyncSession = Depends(get_db), 
     current_user: dict = Depends(check_role(["sysadmin", "admin"]))
 ):
-    """仅上传文档并创建记录，不进行 RAG 解析"""
+    """上传文档并创建记录，可选是否进行 RAG 解析"""
     # 1. 检查文件名是否重复
     existing_doc = await db.execute(select(Document).where(Document.filename == file.filename))
     if existing_doc.scalar_one_or_none():
@@ -113,9 +116,41 @@ async def create_document_simple(
             kb_type=kb_type
         )
         db.add(doc)
+        await db.flush() # 获取 doc.id
+
+        # 4. 如果开启自动导入
+        inserted_count = 0
+        if auto_import and file_ext.lower() == ".pdf":
+            try:
+                clauses_data = pdf_service.parse_pdf(temp_file_path)
+                for item in clauses_data:
+                    embedding = rag_service.get_embedding(item["content"])
+                    clause = Clause(
+                        doc_id=doc.id,
+                        kb_type=kb_type,
+                        chapter_path=item["chapter_path"],
+                        content=item["content"],
+                        page_number=item.get("page_number"),
+                        embedding=embedding,
+                        is_verified=True # 自动导入的默认设为已校验
+                    )
+                    db.add(clause)
+                    inserted_count += 1
+            except Exception as e:
+                print(f"[create_document_simple] 自动解析 PDF 失败: {e}")
+                # 即使解析失败，文档还是传上去了，这里可以选择报错或者继续
+        
         await db.commit()
         await db.refresh(doc)
-        return doc
+        
+        res = {
+            "id": doc.id,
+            "filename": doc.filename,
+            "kb_type": doc.kb_type,
+            "auto_import": auto_import,
+            "inserted_clauses": inserted_count
+        }
+        return res
     finally:
         if os.path.exists(temp_file_path):
             os.remove(temp_file_path)
