@@ -22,6 +22,7 @@ async def list_clauses(
     doc_id: Optional[UUID] = None,
     keyword: Optional[str] = None,
     is_verified: Optional[bool] = None,
+    creator: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
@@ -31,6 +32,8 @@ async def list_clauses(
     # 信息录入员只能看到自己的或者自己所属文档的
     if current_user["role"] == "editor":
         stmt = stmt.where(Clause.creator == current_user["username"])
+    elif creator:
+        stmt = stmt.where(Clause.creator == creator)
 
     if kb_type:
         stmt = stmt.where(Clause.kb_type == kb_type)

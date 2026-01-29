@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from ..database import get_db
-from ..models import Prompt
+from ..models import Prompt, get_beijing_time
 from ..schemas import PromptOut, PromptCreate, PromptUpdate
 from ..auth import get_current_user, check_role
 
@@ -72,7 +72,7 @@ async def update_prompt(
     if prompt_data.is_active is not None:
         prompt_obj.is_active = prompt_data.is_active
     
-    prompt_obj.updated_at = datetime.utcnow()
+    prompt_obj.updated_at = get_beijing_time()
     await db.commit()
     await db.refresh(prompt_obj)
     return prompt_obj

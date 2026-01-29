@@ -35,6 +35,16 @@ async def get_my_info(current_user: dict = Depends(get_current_user)):
     """获取当前用户信息（用于验证 token 有效性）"""
     return current_user
 
+@router.get("/usernames", response_model=List[str])
+async def list_all_usernames(
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_role(["sysadmin", "admin"]))
+):
+    """获取所有用户名列表（用于筛选）"""
+    stmt = select(User.username).order_by(User.username)
+    result = await db.execute(stmt)
+    return [row for row in result.scalars().all()]
+
 @router.get("/users", response_model=PaginatedUsers)
 async def list_users(
     page: int = 1,

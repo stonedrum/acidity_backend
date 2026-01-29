@@ -3,9 +3,13 @@ from sqlalchemy import Column, String, DateTime, ForeignKey, Text, Float, Boolea
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from .config import settings
 from .database import Base
+
+def get_beijing_time():
+    """获取北京时间 (UTC+8)"""
+    return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
 
 class User(Base):
     __tablename__ = "users"
@@ -21,7 +25,7 @@ class Document(Base):
     oss_key = Column(String)
     uploader = Column(String)  # 上传用户名
     kb_type = Column(String, index=True, comment="知识库类型：桥梁、道路、隧道等")  # 增加知识库类型
-    upload_time = Column(DateTime, default=datetime.utcnow)
+    upload_time = Column(DateTime, default=get_beijing_time)
     region_level = Column(String, comment="区域范围：全国，省级，市级")
     province = Column(String, nullable=True)
     city = Column(String, nullable=True)
@@ -38,8 +42,8 @@ class Clause(Base):
     page_number = Column(Integer, nullable=True) # 所在页码
     creator = Column(String, index=True) # 录入人/创建人
     import_method = Column(String, comment="录入方式：pdf 导入，markdown 录入，json 录入，单条录入")
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=get_beijing_time)
+    updated_at = Column(DateTime, default=get_beijing_time, onupdate=get_beijing_time)
     updated_by = Column(String) # 修改人
     embedding = Column(Vector(settings.VECTOR_DIMENSION))
     is_verified = Column(Boolean, default=False)  # 是否已校验
@@ -53,7 +57,7 @@ class ApiCallLog(Base):
     """接口调用日志表"""
     __tablename__ = "api_call_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    call_time = Column(DateTime, default=datetime.utcnow, index=True)  # 调用时间
+    call_time = Column(DateTime, default=get_beijing_time, index=True)  # 调用时间
     username = Column(String, index=True)  # 用户名
     api_name = Column(String, index=True)  # 接口名称，如 "/chat", "/upload", "/search"
     method = Column(String)  # HTTP方法，如 "POST", "GET"
@@ -65,7 +69,7 @@ class ChatQueryLog(Base):
     """Chat查询记录表"""
     __tablename__ = "chat_query_logs"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    query_time = Column(DateTime, default=datetime.utcnow, index=True)  # 查询时间
+    query_time = Column(DateTime, default=get_beijing_time, index=True)  # 查询时间
     username = Column(String, index=True)  # 用户名
     query_content = Column(Text)  # 查询内容
     # 第一次从RAG数据库返回的记录（向量匹配的Top 10）
@@ -88,8 +92,9 @@ class Prompt(Base):
     is_active = Column(Boolean, default=True)  # 是否启用
     version = Column(Integer, default=1)
     description = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=get_beijing_time)
+    updated_at = Column(DateTime, default=get_beijing_time, onupdate=get_beijing_time)
+    updated_at = Column(DateTime, default=get_beijing_time, onupdate=get_beijing_time)
 
 class DictType(Base):
     """字典类型表 (如 kb_type)"""
@@ -97,7 +102,7 @@ class DictType(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     type_name = Column(String, unique=True, index=True) # 如 "kb_type"
     description = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_beijing_time)
 
 class DictData(Base):
     """字典数据表 (如 桥梁, 道路)"""
@@ -108,13 +113,13 @@ class DictData(Base):
     value = Column(String, nullable=False) # 存储值，如 "bridge"
     sort_order = Column(Integer, default=0) # 排序号
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=get_beijing_time)
 
 class ModelComparisonVote(Base):
     """模型比对投票记录表"""
     __tablename__ = "model_comparison_votes"
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    vote_time = Column(DateTime, default=datetime.utcnow, index=True)
+    vote_time = Column(DateTime, default=get_beijing_time, index=True)
     username = Column(String, index=True)
     query_content = Column(Text)
     qwen_response = Column(Text)
@@ -129,7 +134,8 @@ class SystemConfig(Base):
     config_key = Column(String, unique=True, index=True) # 如 "llm_api_key"
     config_value = Column(Text)
     description = Column(String)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=get_beijing_time, onupdate=get_beijing_time)
+
 
 class Region(Base):
     """行政区域表"""

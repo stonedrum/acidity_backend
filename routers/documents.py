@@ -251,6 +251,7 @@ async def list_documents(
     page_size: int = 20,
     kb_type: Optional[str] = None,
     keyword: Optional[str] = None,
+    uploader: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
@@ -260,6 +261,8 @@ async def list_documents(
     # 信息录入员只看自己的
     if current_user["role"] == "editor":
         stmt = stmt.where(Document.uploader == current_user["username"])
+    elif uploader:
+        stmt = stmt.where(Document.uploader == uploader)
         
     if kb_type:
         stmt = stmt.where(Document.kb_type == kb_type)
