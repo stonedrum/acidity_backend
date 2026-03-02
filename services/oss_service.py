@@ -14,12 +14,13 @@ class OSSService:
             self._bucket = oss2.Bucket(auth, settings.OSS_ENDPOINT, settings.OSS_BUCKET_NAME)
         return self._bucket
 
-    def upload_file(self, file_content, filename, directory="laws"):
+    def upload_file(self, file_content, filename, directory="laws", headers=None):
         """
         上传文件到 OSS 指定目录
         :param file_content: 文件内容（bytes）
         :param filename: 文件名
         :param directory: OSS 目录，默认为 "laws"
+        :param headers: 可选的 HTTP 头部信息
         :return: OSS key (完整路径，不以 / 开头)
         """
         # 移除目录开头的 /（如果有）
@@ -30,7 +31,7 @@ class OSSService:
         
         # 构建完整的 OSS key（不以 / 开头）
         oss_key = f"{directory}{filename}"
-        self.bucket.put_object(oss_key, file_content)
+        self.bucket.put_object(oss_key, file_content, headers=headers)
         return oss_key
 
     def get_file_url(self, oss_key):
@@ -43,5 +44,26 @@ class OSSService:
         if oss_key.startswith('/'):
             oss_key = oss_key[1:]
         return f"https://{settings.OSS_BUCKET_NAME}.{settings.OSS_ENDPOINT}/{oss_key}"
+
+    def delete_file(self, file_url_or_key):
+        """
+        从 OSS 删除文件
+        :param file_url_or_key: 文件的完整访问 URL 或 OSS key
+        """
+        if not file_url_or_key:
+            return
+        try:
+            if file_url_or_key.startswith('http'):
+                # 提取 key。URL 格式: https://bucket.endpoint/key
+                from urllib.parse import urlparse
+                parsed_url = urlparse(file_url_or_key)
+                oss_key = parsed_url.path.lstrip('/')
+            else:
+                oss_key = file_url_or_key.lstrip('/')
+                
+            if oss_key:
+                self.bucket.delete_object(oss_key)
+        except Exception as e:
+            print(f"Failed to delete OSS file {file_url_or_key}: {e}")
 
 oss_service = OSSService()

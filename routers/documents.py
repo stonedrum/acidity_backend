@@ -319,8 +319,9 @@ async def delete_document(
     if current_user["role"] == "editor" and doc.uploader != current_user["username"]:
         raise HTTPException(status_code=403, detail="You can only delete your own documents")
     
-    # 删除 OSS 文件（可选，如果需要同步删除）
-    # oss_service.delete_file(doc.oss_key)
+    # 删除 OSS 文件
+    if doc.oss_key:
+        oss_service.delete_file(doc.oss_key)
     
     await db.delete(doc)
     await db.commit()

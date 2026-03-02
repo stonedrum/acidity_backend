@@ -42,8 +42,16 @@ async def upload_for_ocr(
         # 2. 上传到 OSS
         file_ext = os.path.splitext(file.filename)[1]
         oss_filename = f"{uuid.uuid4().hex}{file_ext}"
+        
+        # 编码文件名以避免 HTTP Header 中的中文乱码
+        from urllib.parse import quote
+        encoded_filename = quote(file.filename)
+        headers = {
+            'Content-Disposition': f'inline; filename="{encoded_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+        }
+        
         with open(temp_file_path, "rb") as f:
-            oss_key = oss_service.upload_file(f.read(), oss_filename, directory="ocr_raw")
+            oss_key = oss_service.upload_file(f.read(), oss_filename, directory="ocr_raw", headers=headers)
         
         file_url = oss_service.get_file_url(oss_key)
         
@@ -182,9 +190,64 @@ async def delete_ocr_task(
     if current_user["role"] == "editor" and task.uploader != current_user["username"]:
         raise HTTPException(status_code=403, detail="You can only delete your own tasks")
     
+    # 确定要删除的 OSS 文件列表
+    files_to_delete = []
+    
+    # 1. 检查原始 PDF 文件是否正在被其他模块（如文档管理）使用
+    if task.original_file_url:
+        # 提取 OSS key
+        from urllib.parse import urlparse
+        parsed_url = urlparse(task.original_file_url)
+        oss_key = parsed_url.path.lstrip('/')
+        
+        # 检查 documents 表中是否有记录引用了此文件
+        doc_stmt = select(Document).where(Document.oss_key == oss_key)
+        doc_res = await db.execute(doc_stmt)
+        if not doc_res.scalar_one_or_none():
+            # 没有被文档管理引用，可以安全删除
+            files_to_delete.append(task.original_file_url)
+        else:
+            logger.info(f"Original PDF file {oss_key} is in use by Document Management, skipping deletion.")
+            
+    # 2. 其它 OCR 特有的结果文件（ZIP, JSON, MD）总是可以删除，因为它们只属于这个 OCR 记录
+    if task.result_file_url:
+        files_to_delete.append(task.result_file_url)
+    if task.json_file_url:
+        files_to_delete.append(task.json_file_url)
+    if task.md_file_url:
+        files_to_delete.append(task.md_file_url)
+
+    # 执行删除
+    for url in files_to_delete:
+        oss_service.delete_file(url)
+            
     await db.delete(task)
     await db.commit()
-    return {"message": "OCR task deleted"}
+    return {"message": "OCR task deleted, associated OSS files cleaned up (if not in use)"}
+
+def split_sentences(text: str) -> List[str]:
+    """根据中英文标点将文本切分成句子。保留分隔符，避免在句子中间切断。"""
+    delimiters = r'([。！？；\.!\?;\n])'
+    parts = re.split(delimiters, text)
+    sentences = []
+    for i in range(0, len(parts) - 1, 2):
+        sentences.append(parts[i] + parts[i+1])
+    if len(parts) % 2 == 1 and parts[-1]:
+        sentences.append(parts[-1])
+    return [s.strip() for s in sentences if s.strip()]
+
+def get_item_text(item: dict) -> str:
+    """根据类型提取项的完整文本内容。"""
+    itype = item.get("type")
+    if itype == "text":
+        return item.get("text", "")
+    elif itype == "list":
+        return "\n".join(item.get("list_items", []))
+    elif itype == "table":
+        caption = " ".join(item.get("table_caption", [])) if item.get("table_caption") else ""
+        body = item.get("table_body", "")
+        return f"{caption}\n{body}" if caption else body
+    return ""
 
 @router.post("/ocr/tasks/{ocr_id}/submit_rag", response_model=OcrDocumentOut)
 async def submit_ocr_to_rag(
@@ -196,7 +259,7 @@ async def submit_ocr_to_rag(
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
-    """将 OCR 解析结果（ZIP 中的 Markdown）提交到 RAG 数据库"""
+    """将 OCR 解析结果（JSON 格式）提交到 RAG 数据库"""
     # 1. 获取 OCR 任务信息
     stmt = select(OcrDocument).where(OcrDocument.id == ocr_id)
     result = await db.execute(stmt)
@@ -206,41 +269,84 @@ async def submit_ocr_to_rag(
         raise HTTPException(status_code=404, detail="OCR 任务未找到")
     if ocr_doc.ocr_status != "已识别":
         raise HTTPException(status_code=400, detail="OCR 任务尚未完成识别")
-    if not ocr_doc.result_file_url:
-        raise HTTPException(status_code=400, detail="OCR 任务没有结果文件")
+    if not ocr_doc.json_file_url:
+        raise HTTPException(status_code=400, detail="OCR 任务没有 JSON 结果文件，请先重新识别")
     if ocr_doc.rag_status == "已提交":
         raise HTTPException(status_code=400, detail="任务已提交过 RAG 数据库")
 
     try:
-        # 2. 下载并解压 ZIP
+        # 2. 下载 JSON 内容
         async with httpx.AsyncClient() as client:
-            resp = await client.get(ocr_doc.result_file_url, timeout=60.0)
+            resp = await client.get(ocr_doc.json_file_url, timeout=60.0)
             if resp.status_code != 200:
-                raise HTTPException(status_code=500, detail="无法下载 OCR 结果文件")
-            
-        zip_data = io.BytesIO(resp.content)
-        with zipfile.ZipFile(zip_data) as zf:
-            # MinerU 结果通常包含一个 .md 文件
-            md_files = [n for n in zf.namelist() if n.endswith('.md')]
-            if not md_files:
-                raise HTTPException(status_code=400, detail="ZIP 中未找到 Markdown 内容")
-            
-            # 优先找 content.md
-            md_file_name = "content.md" if "content.md" in md_files else md_files[0]
-            with zf.open(md_file_name) as f:
-                md_content = f.read().decode('utf-8')
+                raise HTTPException(status_code=500, detail="无法下载 OCR JSON 结果文件")
+            data = resp.json()
 
-        # 3. 创建关联文档记录
-        # 提取文件名
-        original_filename = os.path.basename(ocr_doc.original_file_url.split('?')[0])
-        doc_filename = f"OCR_{ocr_id.hex[:6]}_{original_filename}"
+        # 3. 按语句完整性切分 JSON 内容为 Trunk (基于用户提供的算法)
+        max_size = 500
+        allowed_types = ["text", "list", "table"]
+        trunks = []
+        current_content = []
+        current_size = 0
+        current_pages = set()
+
+        def flush_trunk():
+            nonlocal current_content, current_size, current_pages
+            if current_content:
+                content_text = "".join(current_content).strip()
+                if content_text:
+                    trunks.append({
+                        "content": content_text,
+                        "page_indices": sorted(list(current_pages))
+                    })
+                current_content = []
+                current_size = 0
+                current_pages = set()
+
+        for item in data:
+            itype = item.get("type")
+            if itype not in allowed_types:
+                continue
+
+            page_idx = item.get("page_idx")
+            
+            # 表格特殊处理：作为一个独立的原子 Trunk
+            if itype == "table":
+                flush_trunk()
+                table_text = get_item_text(item)
+                if table_text.strip():
+                    trunks.append({
+                        "content": table_text,
+                        "page_indices": [page_idx]
+                    })
+                continue
+
+            # 普通文本或列表：按句子切分
+            full_text = get_item_text(item)
+            sentences = split_sentences(full_text)
+
+            for sen in sentences:
+                sen_size = len(sen)
+                if current_size + sen_size > max_size and current_size > 0:
+                    flush_trunk()
+
+                current_content.append(sen)
+                current_size += sen_size
+                if page_idx is not None:
+                    current_pages.add(page_idx)
+
+                if current_size >= max_size:
+                    flush_trunk()
+
+        flush_trunk()
+
+        # 4. 创建关联文档记录
+        doc_filename = ocr_doc.filename or f"OCR_{ocr_id.hex[:6]}.pdf"
         
-        # 用结果 ZIP 的 key 也可以，或者根据需要调整
-        result_key = ocr_doc.result_file_url.split('/')[-1].split('?')[0]
-        
+        # 检查是否已存在同名文档（如果需要唯一性）
         doc = Document(
-            filename=doc_filename,
-            oss_key=f"ocr_results/{result_key}",
+            filename=f"OCR_{ocr_id.hex[:6]}_{doc_filename}",
+            oss_key=f"ocr_raw/{ocr_doc.original_file_url.split('/')[-1].split('?')[0]}",
             uploader=ocr_doc.uploader,
             kb_type=kb_type,
             region_level=region_level,
@@ -248,68 +354,46 @@ async def submit_ocr_to_rag(
             city=city
         )
         db.add(doc)
-        await db.flush() # 获取 doc.id
+        await db.flush()
 
-        # 4. 解析并插入 Clauses
-        # 按标题分割: ## 标题
-        sections = re.split(r'\n(?=##?\s)', "\n" + md_content)
+        # 5. 插入 Clauses
         inserted_count = 0
-        for section in sections:
-            section = section.strip()
-            if not section: continue
+        for trunk in trunks:
+            content_text = trunk["content"]
+            # 提取 chapter_path: 采用文本块的前 20 个字符作为简单标题，或者固定为 "OCR 解析内容"
+            simple_title = content_text[:30].replace('\n', ' ') + "..." if len(content_text) > 30 else content_text
             
-            lines = section.split('\n')
-            title = lines[0].replace('#', '').strip() if lines[0].startswith('#') else "OCR 条目"
-            body = '\n'.join(lines[1:]).strip() if lines[0].startswith('#') else section
-            
-            if not body: continue
-            
-            # 超过 512 字，按段落/文字长度拆分并组合
-            chunks = []
-            paragraphs = re.split(r'\n\s*\n', body)
-            current_chunk = ""
-            for p in paragraphs:
-                p = p.strip()
-                if not p: continue
-                if len(current_chunk) + len(p) > 512 and current_chunk:
-                    chunks.append(current_chunk.strip())
-                    current_chunk = p
-                else:
-                    if current_chunk:
-                        current_chunk += "\n\n" + p
-                    else:
-                        current_chunk = p
-            if current_chunk:
-                chunks.append(current_chunk.strip())
+            embedding = rag_service.get_embedding(content_text)
+            clause = Clause(
+                doc_id=doc.id,
+                kb_type=kb_type,
+                chapter_path=simple_title,
+                content=content_text,
+                page_number=trunk["page_indices"][0] if trunk["page_indices"] else None,
+                creator=current_user["username"],
+                import_method="ocr 导入",
+                embedding=embedding,
+                is_verified=True,
+                region_level=region_level,
+                province=province,
+                city=city
+            )
+            db.add(clause)
+            inserted_count += 1
 
-            for chunk_text in chunks:
-                embedding = rag_service.get_embedding(chunk_text)
-                clause = Clause(
-                    doc_id=doc.id,
-                    kb_type=kb_type,
-                    chapter_path=title,
-                    content=chunk_text,
-                    creator=current_user["username"],
-                    import_method="ocr 导入",
-                    embedding=embedding,
-                    is_verified=True, # OCR 手工确认提交的设为已校验
-                    region_level=region_level,
-                    province=province,
-                    city=city
-                )
-                db.add(clause)
-                inserted_count += 1
-
-        # 5. 更新任务状态
+        # 6. 更新 OCR 任务状态
         ocr_doc.rag_status = "已提交"
         ocr_doc.submit_time = get_beijing_time()
         ocr_doc.submitter = current_user["username"]
         
         await db.commit()
         await db.refresh(ocr_doc)
+        logger.info(f"[OCR RAG] Task {ocr_id} processed: {inserted_count} clauses inserted.")
         return ocr_doc
         
     except Exception as e:
         await db.rollback()
-        print(f"[submit_ocr_to_rag] Error: {e}")
+        logger.error(f"[OCR RAG] Error: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"提交 RAG 失败: {str(e)}")

@@ -13,18 +13,6 @@ from ..auth import get_current_user, check_role
 
 router = APIRouter(tags=["数据字典"])
 
-@router.get("/dicts/{type_name}", response_model=List[DictDataOut])
-async def get_dict_by_type(type_name: str, db: AsyncSession = Depends(get_db)):
-    """根据类型名称获取字典项（如 /dicts/kb_type）"""
-    stmt = (
-        select(DictData)
-        .join(DictType)
-        .where(DictType.type_name == type_name, DictData.is_active == True)
-        .order_by(DictData.sort_order)
-    )
-    result = await db.execute(stmt)
-    return result.scalars().all()
-
 @router.get("/dicts/dict-types", response_model=List[DictTypeOut])
 async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: dict = Depends(check_role(["sysadmin"]))):
     """列出所有字典类型（管理端使用）"""
@@ -41,9 +29,21 @@ async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: dict
             id=t.id,
             type_name=t.type_name,
             description=t.description,
-            data=[DictDataOut.from_orm(d) for d in t_data]
+            data=t_data
         ))
     return out
+
+@router.get("/dicts/{type_name}", response_model=List[DictDataOut])
+async def get_dict_by_type(type_name: str, db: AsyncSession = Depends(get_db)):
+    """根据类型名称获取字典项（如 /dicts/kb_type）"""
+    stmt = (
+        select(DictData)
+        .join(DictType)
+        .where(DictType.type_name == type_name, DictData.is_active == True)
+        .order_by(DictData.sort_order)
+    )
+    result = await db.execute(stmt)
+    return result.scalars().all()
 
 @router.post("/dicts/dict-types", response_model=DictTypeOut)
 async def create_dict_type(
@@ -89,7 +89,7 @@ async def update_dict_type(
         id=dict_type.id,
         type_name=dict_type.type_name,
         description=dict_type.description,
-        data=[DictDataOut.from_orm(d) for d in t_data]
+        data=t_data
     )
 
 @router.delete("/dicts/dict-types/{type_id}")
