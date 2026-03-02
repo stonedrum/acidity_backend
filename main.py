@@ -1,11 +1,15 @@
 import os
 import time
 import json
+import asyncio
+import httpx
+import uuid
+import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 # 必须在导入任何 huggingface 相关库之前设置环境变量
 os.environ['TRANSFORMERS_OFFLINE'] = '1'
@@ -13,9 +17,12 @@ os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['HF_DATASETS_OFFLINE'] = '1'
 
 from .database import init_db, AsyncSessionLocal
-from .models import Prompt, DictType, DictData, SystemConfig
+from .models import Prompt, DictType, DictData, SystemConfig, OcrDocument, get_beijing_time
 from .config import settings
-from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs, regions
+from .routers import auth, documents, clauses, chat, prompts, dicts, users, configs, regions, ocr
+from .services.mineru_service import mineru_service
+from .services.oss_service import oss_service
+from .services.ocr_process_service import process_mineru_result
 
 app = FastAPI(
     title="Standard Knowledge Base RAG",
@@ -23,6 +30,22 @@ app = FastAPI(
     redoc_url="/redoc" if settings.SHOW_DOCS else None,
     openapi_url="/openapi.json" if settings.SHOW_DOCS else None
 )
+
+# 配置日志
+log_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+log_file = os.path.join(log_dir, "app.log")
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger("main")
 
 # 跨域配置
 app.add_middleware(
@@ -65,10 +88,67 @@ class ApiLoggingMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(ApiLoggingMiddleware)
 
+async def poll_ocr_tasks():
+    """定期轮询 OCR 任务状态 (每 5 分钟)"""
+    while True:
+        try:
+            async with AsyncSessionLocal() as db:
+                # 1. 处理“待提交”的任务
+                stmt_pending = select(OcrDocument).where(OcrDocument.ocr_status == "待提交")
+                res_pending = await db.execute(stmt_pending)
+                pending_tasks = res_pending.scalars().all()
+                
+                for task in pending_tasks:
+                    try:
+                        logger.info(f"[OCR Poll] Attempting to submit task {task.id} to MinerU...")
+                        task_id = await mineru_service.submit_task(task.original_file_url)
+                        task.task_id = task_id
+                        task.ocr_status = "待识别"
+                        await db.commit()
+                        logger.info(f"[OCR Poll] Task {task.id} submitted successfully. MinerU TaskID: {task_id}")
+                    except Exception as e:
+                        logger.error(f"[OCR Poll] Failed to submit task {task.id}: {e}")
+
+                # 2. 处理“待识别”的任务
+                stmt_ocr = select(OcrDocument).where(OcrDocument.ocr_status == "待识别")
+                result = await db.execute(stmt_ocr)
+                tasks = result.scalars().all()
+                
+                if tasks:
+                    logger.info(f"[OCR Poll] Found {len(tasks)} tasks in recognition. Checking status...")
+                
+                for task in tasks:
+                    if not task.task_id:
+                        continue
+                    try:
+                        # 检查 MinerU 状态
+                        logger.info(f"[OCR Poll] Checking task {task.id} (MinerU TaskID: {task.task_id})")
+                        status, zip_url = await mineru_service.get_task_status(task.task_id)
+                        logger.info(f"[OCR Poll] Task {task.task_id} status: {status}")
+                        
+                        if status == "success" and zip_url:
+                            # 使用共享的服务处理结果
+                            await process_mineru_result(task, zip_url, db)
+                        elif status == "failed":
+                            task.ocr_status = "识别失败"
+                            await db.commit()
+                            logger.error(f"[OCR Poll] Task {task.task_id} marked as failed by MinerU.")
+                        elif status == "parsing":
+                            logger.info(f"[OCR Poll] Task {task.task_id} is still parsing...")
+                    except Exception as e:
+                        logger.error(f"[OCR Poll] Unexpected error processing task {task.task_id}: {e}")
+        except Exception as e:
+            logger.error(f"[OCR Poll] Global error in polling loop: {e}")
+            
+        await asyncio.sleep(300) # 每 5 分钟执行一次
+
 @app.on_event("startup")
 async def startup_event():
     # 初始化数据库表
     await init_db()
+    
+    # 启动轮询 OCR 任务的后台任务
+    asyncio.create_task(poll_ocr_tasks())
     
     # 初始化默认数据
     async with AsyncSessionLocal() as db:
@@ -92,7 +172,7 @@ async def startup_event():
             )
             db.add(new_prompt)
             await db.commit()
-            print("[INFO] 已初始化默认提示词：rag_system_prompt")
+            logger.info("[INFO] 已初始化默认提示词：rag_system_prompt")
         
         # 2. 初始化知识库类型字典
         stmt = select(DictType).where(DictType.type_name == "kb_type")
@@ -119,7 +199,7 @@ async def startup_event():
                     sort_order=item["sort"]
                 ))
             await db.commit()
-            print("[INFO] 已初始化数据字典：kb_type")
+            logger.info("[INFO] 已初始化数据字典：kb_type")
 
         # 3. 初始化系统配置 (LLM 相关)
         default_configs = [
@@ -158,6 +238,7 @@ app.include_router(dicts.router)
 app.include_router(users.router)
 app.include_router(configs.router)
 app.include_router(regions.router)
+app.include_router(ocr.router)
 
 if __name__ == "__main__":
     import uvicorn

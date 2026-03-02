@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     DEEPSEEK_API_KEY: str = ""
     DEEPSEEK_BASE_URL: str = "https://api.deepseek.com/v1"
     
+    # MinerU
+    MINERU_API_KEY: str = ""
+    MINERU_BASE_URL: str = "https://mineru.net/api/v4"
+    
     # 是否显示 API 文档 (docs/redoc)
     SHOW_DOCS: bool = True
     

@@ -306,3 +306,31 @@ class RegionOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+# --- OCR 相关 Schema ---
+
+class OcrDocumentOut(BaseModel):
+    id: UUID
+    filename: Optional[str] = None
+    original_file_url: str
+    task_id: Optional[str] = None
+    result_file_url: Optional[str] = None
+    json_file_url: Optional[str] = None
+    md_file_url: Optional[str] = None
+    ocr_status: str
+    rag_status: str
+    upload_time: datetime
+    ocr_time: Optional[datetime] = None
+    submit_time: Optional[datetime] = None
+    uploader: str
+    submitter: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+class PaginatedOcrDocuments(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+    items: List[OcrDocumentOut]

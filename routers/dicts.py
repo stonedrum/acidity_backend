@@ -25,7 +25,7 @@ async def get_dict_by_type(type_name: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(stmt)
     return result.scalars().all()
 
-@router.get("/dict-types", response_model=List[DictTypeOut])
+@router.get("/dicts/dict-types", response_model=List[DictTypeOut])
 async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: dict = Depends(check_role(["sysadmin"]))):
     """列出所有字典类型（管理端使用）"""
     stmt = select(DictType)
@@ -45,7 +45,7 @@ async def list_dict_types(db: AsyncSession = Depends(get_db), current_user: dict
         ))
     return out
 
-@router.post("/dict-types", response_model=DictTypeOut)
+@router.post("/dicts/dict-types", response_model=DictTypeOut)
 async def create_dict_type(
     type_data: DictTypeCreate,
     db: AsyncSession = Depends(get_db),
@@ -62,7 +62,7 @@ async def create_dict_type(
     await db.refresh(new_type)
     return DictTypeOut(id=new_type.id, type_name=new_type.type_name, description=new_type.description, data=[])
 
-@router.put("/dict-types/{type_id}", response_model=DictTypeOut)
+@router.put("/dicts/dict-types/{type_id}", response_model=DictTypeOut)
 async def update_dict_type(
     type_id: UUID,
     type_data: DictTypeUpdate,
@@ -92,7 +92,7 @@ async def update_dict_type(
         data=[DictDataOut.from_orm(d) for d in t_data]
     )
 
-@router.delete("/dict-types/{type_id}")
+@router.delete("/dicts/dict-types/{type_id}")
 async def delete_dict_type(
     type_id: UUID,
     db: AsyncSession = Depends(get_db),
@@ -111,7 +111,7 @@ async def delete_dict_type(
     await db.commit()
     return {"message": "Dict type deleted"}
 
-@router.post("/dict-data/{type_id}", response_model=DictDataOut)
+@router.post("/dicts/dict-data/{type_id}", response_model=DictDataOut)
 async def create_dict_data(
     type_id: UUID,
     data_item: DictDataCreate,
@@ -129,7 +129,7 @@ async def create_dict_data(
     await db.refresh(new_data)
     return new_data
 
-@router.put("/dict-data/{data_id}", response_model=DictDataOut)
+@router.put("/dicts/dict-data/{data_id}", response_model=DictDataOut)
 async def update_dict_data(
     data_id: UUID,
     data_item: DictDataUpdate,
@@ -149,7 +149,7 @@ async def update_dict_data(
     await db.refresh(db_data)
     return db_data
 
-@router.delete("/dict-data/{data_id}")
+@router.delete("/dicts/dict-data/{data_id}")
 async def delete_dict_data(
     data_id: UUID,
     db: AsyncSession = Depends(get_db),

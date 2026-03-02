@@ -146,3 +146,21 @@ class Region(Base):
     level = Column(Integer, comment="1: 省/直辖市, 2: 地级市")
     
     parent = relationship("Region", remote_side=[id], backref="children")
+
+class OcrDocument(Base):
+    """OCR 文档解析任务表"""
+    __tablename__ = "ocr_documents"
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    filename = Column(String, nullable=True) # 原始文件名
+    original_file_url = Column(String) # 原始文档 oss 地址
+    task_id = Column(String, index=True, nullable=True) # 解析任务 id
+    result_file_url = Column(String, nullable=True) # 解析后的 zip 文档 oss 地址
+    json_file_url = Column(String, nullable=True) # 解析后的 json 文档 oss 地址
+    md_file_url = Column(String, nullable=True) # 解析后的 md 文档 oss 地址
+    ocr_status = Column(String, default="待提交") # 识别状态（待提交，待识别，已识别，识别失败）
+    rag_status = Column(String, default="未提交") # rag 数据库提交状态（未提交，已提交）
+    upload_time = Column(DateTime, default=get_beijing_time) # 文件上传时间
+    ocr_time = Column(DateTime, nullable=True) # 识别时间
+    submit_time = Column(DateTime, nullable=True) # 提交时间
+    uploader = Column(String) # 上传文件用户
+    submitter = Column(String, nullable=True) # 提交数据库用户
