@@ -141,6 +141,7 @@ async def list_ocr_tasks(
     page: int = Query(1, ge=1),
     page_size: int = Query(15, ge=1),
     ocr_status: Optional[str] = None,
+    rag_status: Optional[str] = None,
     uploader: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
@@ -155,6 +156,9 @@ async def list_ocr_tasks(
     
     if ocr_status:
         stmt = stmt.where(OcrDocument.ocr_status == ocr_status)
+    
+    if rag_status:
+        stmt = stmt.where(OcrDocument.rag_status == rag_status)
     
     # 计算总数
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -369,7 +373,7 @@ async def submit_ocr_to_rag(
                 kb_type=kb_type,
                 chapter_path=simple_title,
                 content=content_text,
-                page_number=trunk["page_indices"][0] if trunk["page_indices"] else None,
+                page_number=(trunk["page_indices"][0] + 1) if trunk["page_indices"] and trunk["page_indices"][0] is not None else None,
                 creator=current_user["username"],
                 import_method="ocr 导入",
                 embedding=embedding,
