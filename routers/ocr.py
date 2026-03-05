@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from datetime import datetime
 from ..database import get_db
-from ..models import OcrDocument, get_beijing_time, Clause, Document
+from ..models import OcrDocument, get_beijing_time, Clause, Document, SystemConfig
 from ..schemas import OcrDocumentOut, PaginatedOcrDocuments
 from ..auth import get_current_user, check_role
 from ..services.oss_service import oss_service
@@ -286,63 +286,57 @@ async def submit_ocr_to_rag(
                 raise HTTPException(status_code=500, detail="无法下载 OCR JSON 结果文件")
             data = resp.json()
 
-        # 3. 按语句完整性切分 JSON 内容为 Trunk (基于用户提供的算法)
-        max_size = 500
+        # 3. 按语句完整性切分 JSON 内容为 Trunk
+        # 获取系统配置的 Trunk 最大字数
+        cfg_stmt = select(SystemConfig).where(SystemConfig.config_key == "ocr_trunk_max_size")
+        cfg_res = await db.execute(cfg_stmt)
+        cfg_val = cfg_res.scalar_one_or_none()
+        max_size = int(cfg_val.config_value) if cfg_val else 500
+        
         allowed_types = ["text", "list", "table"]
+        # 排除页眉、页脚、脚注等
+        excluded_types = ["header", "footer", "page_header", "page_footer", "footnote", "page_number"]
+        
         trunks = []
-        current_content = []
-        current_size = 0
-        current_pages = set()
-
-        def flush_trunk():
-            nonlocal current_content, current_size, current_pages
-            if current_content:
-                content_text = "".join(current_content).strip()
-                if content_text:
-                    trunks.append({
-                        "content": content_text,
-                        "page_indices": sorted(list(current_pages))
-                    })
-                current_content = []
-                current_size = 0
-                current_pages = set()
+        current_trunk_text = ""
+        current_trunk_pages = set()
 
         for item in data:
             itype = item.get("type")
-            if itype not in allowed_types:
+            # 过滤掉不参与 RAG 的类型以及页眉页脚
+            if itype in excluded_types or itype not in allowed_types:
+                continue
+
+            item_text = get_item_text(item).strip()
+            if not item_text:
                 continue
 
             page_idx = item.get("page_idx")
             
-            # 表格特殊处理：作为一个独立的原子 Trunk
-            if itype == "table":
-                flush_trunk()
-                table_text = get_item_text(item)
-                if table_text.strip():
-                    trunks.append({
-                        "content": table_text,
-                        "page_indices": [page_idx]
-                    })
-                continue
+            # 拼接内容
+            if current_trunk_text:
+                current_trunk_text += "\n" + item_text
+            else:
+                current_trunk_text = item_text
+            
+            if page_idx is not None:
+                current_trunk_pages.add(page_idx)
+            
+            # 如果当前积攒的内容已达到或超过最大限制，则作为一个 Trunk
+            if len(current_trunk_text) >= max_size:
+                trunks.append({
+                    "content": current_trunk_text,
+                    "page_indices": sorted(list(current_trunk_pages))
+                })
+                current_trunk_text = ""
+                current_trunk_pages = set()
 
-            # 普通文本或列表：按句子切分
-            full_text = get_item_text(item)
-            sentences = split_sentences(full_text)
-
-            for sen in sentences:
-                sen_size = len(sen)
-                if current_size + sen_size > max_size and current_size > 0:
-                    flush_trunk()
-
-                current_content.append(sen)
-                current_size += sen_size
-                if page_idx is not None:
-                    current_pages.add(page_idx)
-
-                if current_size >= max_size:
-                    flush_trunk()
-
-        flush_trunk()
+        # 处理最后剩余的内容
+        if current_trunk_text:
+            trunks.append({
+                "content": current_trunk_text,
+                "page_indices": sorted(list(current_trunk_pages))
+            })
 
         # 4. 创建关联文档记录
         doc_filename = ocr_doc.filename or f"OCR_{ocr_id.hex[:6]}.pdf"
