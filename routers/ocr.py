@@ -287,11 +287,11 @@ async def submit_ocr_to_rag(
             data = resp.json()
 
         # 3. 按语句完整性切分 JSON 内容为 Trunk
-        # 获取系统配置的 Trunk 最大字数
-        cfg_stmt = select(SystemConfig).where(SystemConfig.config_key == "ocr_trunk_max_size")
+        # 获取系统配置的 Trunk 建议字数
+        cfg_stmt = select(SystemConfig).where(SystemConfig.config_key == "ocr_trunk_size")
         cfg_res = await db.execute(cfg_stmt)
         cfg_val = cfg_res.scalar_one_or_none()
-        max_size = int(cfg_val.config_value) if cfg_val else 500
+        suggested_size = int(cfg_val.config_value) if cfg_val else 512
         
         allowed_types = ["text", "list", "table"]
         # 排除页眉、页脚、脚注等
@@ -322,8 +322,8 @@ async def submit_ocr_to_rag(
             if page_idx is not None:
                 current_trunk_pages.add(page_idx)
             
-            # 如果当前积攒的内容已达到或超过最大限制，则作为一个 Trunk
-            if len(current_trunk_text) >= max_size:
+            # 如果当前积攒的内容已达到或超过建议限制，则作为一个 Trunk
+            if len(current_trunk_text) >= suggested_size:
                 trunks.append({
                     "content": current_trunk_text,
                     "page_indices": sorted(list(current_trunk_pages))

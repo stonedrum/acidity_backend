@@ -321,11 +321,15 @@ async def delete_document(
     
     # 删除 OSS 文件
     if doc.oss_key:
-        oss_service.delete_file(doc.oss_key)
+        try:
+            oss_service.delete_file(doc.oss_key)
+        except Exception as e:
+            print(f"[delete_document] Failed to delete OSS file: {e}")
     
+    # 删除数据库记录 (由于模型中定义了 cascade="all, delete-orphan"，关联的 clauses 会自动删除)
     await db.delete(doc)
     await db.commit()
-    return {"message": "Document and associated clauses deleted"}
+    return {"message": "Document and associated clauses deleted from database and OSS"}
 
 @router.post("/documents/{doc_id}/import-markdown")
 async def import_markdown(
@@ -350,6 +354,13 @@ async def import_markdown(
     content = await file.read()
     text = content.decode("utf-8")
     
+    # 获取系统配置的 Trunk 建议字数
+    from ..models import SystemConfig
+    cfg_stmt = select(SystemConfig).where(SystemConfig.config_key == "doc_trunk_size")
+    cfg_res = await db.execute(cfg_stmt)
+    cfg_val = cfg_res.scalar_one_or_none()
+    suggested_size = int(cfg_val.config_value) if cfg_val else 512
+    
     # 按二级标题拆分: ## 标题
     import re
     sections = re.split(r'\n(?=##\s)', "\n" + text)
@@ -370,10 +381,10 @@ async def import_markdown(
 
         # 拆分逻辑
         chunks = []
-        if len(body) <= 1024 and '|' not in body: # 如果内容不多且没表格，直接存
+        if len(body) <= suggested_size * 2 and '|' not in body: # 如果内容不多且没表格，直接存
             chunks.append(body)
         else:
-            # 超过 1024 字，或者包含表格，按段落/表格拆分并组合
+            # 超过 2 倍 suggested_size，或者包含表格，按段落/表格拆分并组合
             paragraphs = re.split(r'\n\s*\n', body)
             current_chunk = ""
             
@@ -401,8 +412,8 @@ async def import_markdown(
                     chunks.append(p)
                     continue
 
-                # 非表格按 512 字逻辑合并
-                if len(current_chunk) + len(p) > 512 and current_chunk:
+                # 非表格按 suggested_size 逻辑合并
+                if len(current_chunk) + len(p) > suggested_size and current_chunk:
                     chunks.append(current_chunk.strip())
                     current_chunk = p
                 else:

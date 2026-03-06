@@ -43,7 +43,8 @@ async def update_config(
         "deepseek_api_key", "deepseek_base_url", "deepseek_model",
         "system_default_model",
         "initial_rag_count", "initial_rag_threshold",
-        "rerank_count", "rerank_threshold"
+        "rerank_count", "rerank_threshold",
+        "ocr_trunk_size", "doc_trunk_size"
     ]
     if config_key in llm_related_keys or config_key.startswith("llm_") or config_key.startswith("deepseek_"):
         await llm_service.refresh_configs(db)
