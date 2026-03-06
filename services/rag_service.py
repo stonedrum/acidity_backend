@@ -4,18 +4,29 @@ os.environ['TRANSFORMERS_OFFLINE'] = '1'
 os.environ['HF_HUB_OFFLINE'] = '1'
 os.environ['HF_DATASETS_OFFLINE'] = '1'
 
+import torch
 from sentence_transformers import SentenceTransformer, CrossEncoder
 from ..config import settings
 import numpy as np
 
 class RAGService:
     def __init__(self):
+        # 自动检测硬件加速设备
+        if torch.cuda.is_available():
+            self.device = "cuda"  # Windows/Linux + NVIDIA GPU
+        elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            self.device = "mps"   # macOS M1/M2/M3 Apple Silicon
+        else:
+            self.device = "cpu"   # 默认 CPU
+            
+        print(f"[RAGService] 检测到加速设备: {self.device}")
+
         # 向量模型加载
         # 如果设置了 VECTOR_MODEL_PATH，优先使用自定义路径；否则使用 VECTOR_MODEL_NAME
         vector_model_path = settings.VECTOR_MODEL_PATH if settings.VECTOR_MODEL_PATH else settings.VECTOR_MODEL_NAME
         print(f"[RAGService] 加载向量模型: {vector_model_path}")
         # 使用 local_files_only=True 强制使用本地文件（不下载）
-        self.embedding_model = SentenceTransformer(vector_model_path, local_files_only=True)
+        self.embedding_model = SentenceTransformer(vector_model_path, local_files_only=True, device=self.device)
         
         # 重排模型加载
         # 如果设置了 RERANK_MODEL_PATH，优先使用自定义路径；否则使用 RERANK_MODEL_NAME
@@ -23,11 +34,11 @@ class RAGService:
         print(f"[RAGService] 加载重排模型: {rerank_model_path}")
         # 注意：CrossEncoder 可能不支持 local_files_only，但环境变量应该能阻止网络请求
         try:
-            self.rerank_model = CrossEncoder(rerank_model_path, local_files_only=True)
+            self.rerank_model = CrossEncoder(rerank_model_path, local_files_only=True, device=self.device)
         except Exception as e:
             # 如果 local_files_only 不支持，尝试不使用该参数，但环境变量应该已经禁用了网络
             print(f"[RAGService] 警告: 使用 local_files_only 加载重排模型失败，尝试不使用该参数: {e}")
-            self.rerank_model = CrossEncoder(rerank_model_path)
+            self.rerank_model = CrossEncoder(rerank_model_path, device=self.device)
 
     def get_embedding(self, text):
         return self.embedding_model.encode(text).tolist()
