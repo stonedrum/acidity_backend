@@ -293,6 +293,16 @@ async def submit_ocr_to_rag(
         cfg_val = cfg_res.scalar_one_or_none()
         suggested_size = int(cfg_val.config_value) if cfg_val else 512
         
+        # 兼容性处理：如果是字典格式，提取列表部分
+        if isinstance(data, dict):
+            if "content_list" in data:
+                data = data["content_list"]
+            elif "data" in data:
+                data = data["data"]
+        
+        if not isinstance(data, list):
+            raise HTTPException(status_code=500, detail="OCR JSON 格式异常：未找到内容列表")
+
         allowed_types = ["text", "list", "table"]
         # 排除页眉、页脚、脚注等
         excluded_types = ["header", "footer", "page_header", "page_footer", "footnote", "page_number"]
@@ -300,6 +310,16 @@ async def submit_ocr_to_rag(
         trunks = []
         current_trunk_text = ""
         current_trunk_pages = set()
+
+        def flush_trunk():
+            nonlocal current_trunk_text, current_trunk_pages
+            if current_trunk_text:
+                trunks.append({
+                    "content": current_trunk_text.strip(),
+                    "page_indices": sorted(list(current_trunk_pages))
+                })
+                current_trunk_text = ""
+                current_trunk_pages = set()
 
         for item in data:
             itype = item.get("type")
@@ -320,23 +340,19 @@ async def submit_ocr_to_rag(
                 current_trunk_text = item_text
             
             if page_idx is not None:
-                current_trunk_pages.add(page_idx)
+                try:
+                    # 强制转换为整数，并确保 page_idx + 1 的正确性
+                    current_trunk_pages.add(int(page_idx))
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid page_idx found in OCR JSON: {page_idx}")
             
-            # 如果当前积攒的内容已达到或超过建议限制，则作为一个 Trunk
+            # 如果当前积攒的内容已达到或超过建议限制，则结算
+            # 这样保证了每个 Trunk 至少为 suggested_size (除非是文档末尾)
             if len(current_trunk_text) >= suggested_size:
-                trunks.append({
-                    "content": current_trunk_text,
-                    "page_indices": sorted(list(current_trunk_pages))
-                })
-                current_trunk_text = ""
-                current_trunk_pages = set()
+                flush_trunk()
 
         # 处理最后剩余的内容
-        if current_trunk_text:
-            trunks.append({
-                "content": current_trunk_text,
-                "page_indices": sorted(list(current_trunk_pages))
-            })
+        flush_trunk()
 
         # 4. 创建关联文档记录
         doc_filename = ocr_doc.filename or f"OCR_{ocr_id.hex[:6]}.pdf"
