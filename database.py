@@ -35,6 +35,8 @@ async def init_db():
             await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS region_level VARCHAR"))
             await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS province VARCHAR"))
             await conn.execute(text("ALTER TABLE clauses ADD COLUMN IF NOT EXISTS city VARCHAR"))
+            # 查询日志：RAG 拼接查询过程（供详情页展示）
+            await conn.execute(text("ALTER TABLE chat_query_logs ADD COLUMN IF NOT EXISTS rag_query_steps JSONB"))
         except Exception as e:
             print(f"[init_db] 尝试添加字段失败: {e}")
             

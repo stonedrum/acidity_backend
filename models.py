@@ -80,6 +80,7 @@ class ChatQueryLog(Base):
     llm_response = Column(Text)  # LLM返回的完整内容
     llm_messages = Column(JSONB)  # 发送给 LLM 的完整消息列表（包含 system, history, user）
     intent_info = Column(JSONB)  # 意图识别详细信息 (prompt, response, detected_type)
+    rag_query_steps = Column(JSONB, nullable=True)  # RAG 拼接查询过程 [{step, history_count, query_used, had_rerank_results}, ...]
     model_name = Column(String)  # 调用的模型名称
     query_duration_seconds = Column(Float)  # 查询所花时间（秒）
 
@@ -159,6 +160,7 @@ class OcrDocument(Base):
     md_file_url = Column(String, nullable=True) # 解析后的 md 文档 oss 地址
     ocr_status = Column(String, default="待提交") # 识别状态（待提交，待识别，已识别，识别失败）
     rag_status = Column(String, default="未提交") # rag 数据库提交状态（未提交，已提交）
+    kb_type = Column(String, index=True, nullable=True, comment="知识库类型") # 知识库类型
     upload_time = Column(DateTime, default=get_beijing_time) # 文件上传时间
     ocr_time = Column(DateTime, nullable=True) # 识别时间
     submit_time = Column(DateTime, nullable=True) # 提交时间

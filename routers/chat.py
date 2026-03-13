@@ -1,3 +1,4 @@
+import logging
 import time
 from typing import Optional, List
 from uuid import UUID
@@ -19,6 +20,7 @@ from ..services.prompt_service import get_prompt_template
 from ..config import settings
 
 router = APIRouter(tags=["问答检索"])
+logger = logging.getLogger("chat")
 
 @router.post("/search", response_model=List[ClauseOut])
 async def search(query_data: SearchQuery, db: AsyncSession = Depends(get_db)):
@@ -97,21 +99,52 @@ async def chat(
                 valid_values = [t.value for t in kb_types]
                 if detected_type in valid_values:
                     effective_kb_type = detected_type
-                    print(f"[Intent] 自动识别知识库类型: {effective_kb_type}")
+                    logger.info(f"[Intent] 自动识别知识库类型: {effective_kb_type}")
         except Exception as e:
-            print(f"[Intent Error] 意图识别失败: {e}")
+            logger.warning(f"[Intent Error] 意图识别失败: {e}")
             intent_info = {"error": str(e)}
 
-    initial_results, reranked_results = await rag_service.search_and_rerank(
-        request.message, 
-        db, 
-        kb_type=effective_kb_type,
-        return_initial_results=True
-    )
-    
-    # 如果没有找到任何匹配的参考资料，直接返回提示信息，不再调用大模型
+    # 查询 RAG：首次用当前问题；若重排后无结果则依次拼接 1～4 条历史用户问句再查，每次都以「重排后是否有结果」为准
+    history_list = request.history if request.history is not None else []
+    user_messages = [m.content.strip() for m in history_list if getattr(m, "role", "") == "user"]
+    logger.info(f"[RAG] 收到历史条数={len(history_list)}, 其中用户问句数={len(user_messages)}, 当前消息={request.message.strip()[:60]}...")
+    initial_results, reranked_results = None, None
+    rag_query_steps = []  # 记录每次尝试的拼接查询过程，供日志详情展示
+    for prev_count in range(0, 5):
+        if prev_count == 0:
+            rag_query = request.message.strip()
+            logger.info(f"[RAG] 第 1 次尝试：仅当前问句，query_len={len(rag_query)}")
+        else:
+            if len(user_messages) < prev_count:
+                logger.info(f"[RAG] 历史用户问句不足 {prev_count} 条，停止拼接尝试")
+                break
+            rag_query = " ".join(user_messages[-prev_count:] + [request.message.strip()])
+            logger.info(f"[RAG] 第 {prev_count + 1} 次尝试：拼接 {prev_count} 条历史，query_len={len(rag_query)}")
+        initial_results, reranked_results = await rag_service.search_and_rerank(
+            rag_query,
+            db,
+            kb_type=effective_kb_type,
+            return_initial_results=True
+        )
+        n_rerank = len(reranked_results) if reranked_results else 0
+        logger.info(f"[RAG] 本步重排结果数={n_rerank}, had_rerank_results={bool(reranked_results)}")
+        # 记录本步：用于查询日志详情页展示拼接过程
+        rag_query_steps.append({
+            "step": len(rag_query_steps) + 1,
+            "history_count": prev_count,
+            "query_used": rag_query[:500] + ("..." if len(rag_query) > 500 else ""),
+            "had_rerank_results": bool(reranked_results),
+        })
+        if reranked_results:
+            if prev_count > 0:
+                logger.info(f"[RAG] 拼接 {prev_count} 条历史后命中重排结果，停止尝试")
+            break
+        if prev_count > 0:
+            logger.info(f"[RAG] 已拼接 {prev_count} 条历史仍无重排结果，继续尝试更多历史")
+
+    # 最多 5 轮尝试后仍无匹配参考资料，提示用户给出完整描述
     if not reranked_results:
-        no_result_msg = "您好，未找到相关参考资料。"
+        no_result_msg = "未找到相关参考资料，请您给出更完整的问题描述后再试。"
         
         # 记录日志
         try:
@@ -124,13 +157,14 @@ async def chat(
                 llm_response=no_result_msg,
                 llm_messages=[{"role": "user", "content": request.message}], # 仅记录当前提问
                 intent_info=intent_info, # 记录意图识别详情
+                rag_query_steps=rag_query_steps,
                 model_name=model_name,
                 query_duration_seconds=query_duration
             )
             db.add(chat_log)
             await db.commit()
         except Exception as e:
-            print(f"[ERROR] 保存查询记录失败: {e}")
+            logger.error(f"[ERROR] 保存查询记录失败: {e}")
 
         if request.stream:
             async def empty_stream():
@@ -226,10 +260,11 @@ async def chat(
     prompt_template = await get_prompt_template(db, "rag_system_prompt", default_system_template)
     system_prompt = prompt_template.format(context=context)
     
-    messages = [{"role": "system", "content": system_prompt}]
-    for msg in request.history:
-        messages.append({"role": msg.role, "content": msg.content})
-    messages.append({"role": "user", "content": request.message})
+    # 仅将当前问题发给 LLM；历史对话只用于 RAG 补充查询，不传入 LLM
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": request.message}
+    ]
     
     # 3. Call LLM
     if request.stream:
@@ -263,13 +298,14 @@ async def chat(
                         llm_response=collected_content,
                         llm_messages=messages,  # 保存完整的消息列表
                         intent_info=intent_info, # 记录意图识别详情
+                        rag_query_steps=rag_query_steps,
                         model_name=actual_model_name, # 使用解析后的实际模型名
                         query_duration_seconds=query_duration
                     )
                     db.add(chat_log)
                     await db.commit()
                 except Exception as e:
-                    print(f"[ERROR] 保存查询记录失败: {e}")
+                    logger.error(f"[ERROR] 保存查询记录失败: {e}")
         return StreamingResponse(stream_wrapper(), media_type="text/plain; charset=utf-8")
     else:
         try:
@@ -291,6 +327,7 @@ async def chat(
                 llm_response=response_content,
                 llm_messages=messages,  # 保存完整的消息列表
                 intent_info=intent_info, # 记录意图识别详情
+                rag_query_steps=rag_query_steps,
                 model_name=actual_model_name, # 使用解析后的实际模型名
                 query_duration_seconds=query_duration
             )
@@ -343,7 +380,8 @@ async def get_chat_logs(
             reranked_results=log.reranked_results,
             llm_response=log.llm_response,
             llm_messages=log.llm_messages,
-            intent_info=log.intent_info, # 新增字段
+            intent_info=log.intent_info,
+            rag_query_steps=log.rag_query_steps,
             model_name=log.model_name,
             query_duration_seconds=log.query_duration_seconds
         ))

@@ -26,6 +26,7 @@ logger = logging.getLogger("ocr_router")
 @router.post("/ocr/upload", response_model=OcrDocumentOut)
 async def upload_for_ocr(
     file: UploadFile = File(...),
+    kb_type: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
 ):
@@ -62,6 +63,7 @@ async def upload_for_ocr(
             task_id=None,
             ocr_status="待提交",
             rag_status="未提交",
+            kb_type=kb_type,
             uploader=current_user["username"]
         )
         db.add(ocr_doc)
@@ -77,7 +79,7 @@ async def upload_for_ocr(
             await db.refresh(ocr_doc)
         except Exception as e:
             # 提交失败保持“待提交”状态，由后台任务重试
-            print(f"[OCR Upload] Initial MinerU submission failed for {ocr_doc.id}: {e}")
+            logger.warning(f"[OCR Upload] Initial MinerU submission failed for {ocr_doc.id}: {e}")
         
         return ocr_doc
     finally:
@@ -119,6 +121,8 @@ async def check_ocr_task(
                 # 使用共享的服务处理结果
                 success = await process_mineru_result(task, zip_url, db)
                 if not success:
+                    task.ocr_status = "识别失败"
+                    await db.commit()
                     raise HTTPException(status_code=500, detail="处理 OCR 结果失败")
             elif status == "failed":
                 logger.warning(f"[Manual Check] MinerU Task {task.task_id} failed.")
@@ -126,15 +130,59 @@ async def check_ocr_task(
                 await db.commit()
             else:
                 logger.info(f"[Manual Check] MinerU Task {task.task_id} is still in progress: {status}")
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"[Manual Check] Error processing task {task.task_id}: {e}")
-            if not isinstance(e, HTTPException):
-                raise HTTPException(status_code=500, detail=f"检查 MinerU 状态失败: {str(e)}")
-            else:
-                raise
+            # 接口返回错误或异常时也更新 OCR 状态为识别失败，便于用户重新识别
+            task.ocr_status = "识别失败"
+            await db.commit()
+            await db.refresh(task)
+            raise HTTPException(status_code=500, detail=f"检查 MinerU 状态失败: {str(e)}")
             
     await db.refresh(task)
     return task
+
+
+@router.post("/ocr/tasks/{ocr_id}/resubmit_ocr", response_model=OcrDocumentOut)
+async def resubmit_ocr_task(
+    ocr_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+    current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
+):
+    """对识别失败的任务重新提交 OCR 识别（使用已有 OSS 文件，不重复上传，更换为新的 task_id）"""
+    stmt = select(OcrDocument).where(OcrDocument.id == ocr_id)
+    result = await db.execute(stmt)
+    task = result.scalar_one_or_none()
+
+    if not task:
+        raise HTTPException(status_code=404, detail="OCR 任务未找到")
+
+    if current_user["role"] == "editor" and task.uploader != current_user["username"]:
+        raise HTTPException(status_code=403, detail="只能操作自己上传的任务")
+
+    if task.ocr_status != "识别失败":
+        raise HTTPException(status_code=400, detail="仅支持对「识别失败」的任务重新提交 OCR 识别")
+
+    if not task.original_file_url:
+        raise HTTPException(status_code=400, detail="原始文件地址不存在，无法重新提交")
+
+    try:
+        new_task_id = await mineru_service.submit_task(task.original_file_url)
+    except Exception as e:
+        logger.error(f"[Resubmit OCR] MinerU submit failed for {ocr_id}: {e}")
+        raise HTTPException(status_code=500, detail=f"提交 MinerU 失败: {str(e)}")
+
+    task.task_id = new_task_id
+    task.ocr_status = "待识别"
+    task.result_file_url = None
+    task.json_file_url = None
+    task.md_file_url = None
+    await db.commit()
+    await db.refresh(task)
+    logger.info(f"[Resubmit OCR] Task {ocr_id} resubmitted with new MinerU task_id: {new_task_id}")
+    return task
+
 
 @router.get("/ocr/tasks", response_model=PaginatedOcrDocuments)
 async def list_ocr_tasks(
@@ -142,6 +190,7 @@ async def list_ocr_tasks(
     page_size: int = Query(15, ge=1),
     ocr_status: Optional[str] = None,
     rag_status: Optional[str] = None,
+    kb_type: Optional[str] = None,
     uploader: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
     current_user: dict = Depends(check_role(["sysadmin", "admin", "editor"]))
@@ -159,6 +208,9 @@ async def list_ocr_tasks(
     
     if rag_status:
         stmt = stmt.where(OcrDocument.rag_status == rag_status)
+    
+    if kb_type:
+        stmt = stmt.where(OcrDocument.kb_type == kb_type)
     
     # 计算总数
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -256,7 +308,7 @@ def get_item_text(item: dict) -> str:
 @router.post("/ocr/tasks/{ocr_id}/submit_rag", response_model=OcrDocumentOut)
 async def submit_ocr_to_rag(
     ocr_id: uuid.UUID,
-    kb_type: str = Form(...),
+    kb_type: Optional[str] = Form(None),
     region_level: Optional[str] = Form(None),
     province: Optional[str] = Form(None),
     city: Optional[str] = Form(None),
@@ -271,6 +323,12 @@ async def submit_ocr_to_rag(
     
     if not ocr_doc:
         raise HTTPException(status_code=404, detail="OCR 任务未找到")
+    
+    # 优先使用表单中的 kb_type，如果没有则使用 ocr_doc 中的，再没有则抛出错误
+    final_kb_type = kb_type or ocr_doc.kb_type
+    if not final_kb_type:
+        raise HTTPException(status_code=400, detail="未指定知识库类型")
+
     if ocr_doc.ocr_status != "已识别":
         raise HTTPException(status_code=400, detail="OCR 任务尚未完成识别")
     if not ocr_doc.json_file_url:
@@ -362,7 +420,7 @@ async def submit_ocr_to_rag(
             filename=f"OCR_{ocr_id.hex[:6]}_{doc_filename}",
             oss_key=f"ocr_raw/{ocr_doc.original_file_url.split('/')[-1].split('?')[0]}",
             uploader=ocr_doc.uploader,
-            kb_type=kb_type,
+            kb_type=final_kb_type,
             region_level=region_level,
             province=province,
             city=city
@@ -380,7 +438,7 @@ async def submit_ocr_to_rag(
             embedding = rag_service.get_embedding(content_text)
             clause = Clause(
                 doc_id=doc.id,
-                kb_type=kb_type,
+                kb_type=final_kb_type,
                 chapter_path=simple_title,
                 content=content_text,
                 page_number=(trunk["page_indices"][0] + 1) if trunk["page_indices"] and trunk["page_indices"][0] is not None else None,

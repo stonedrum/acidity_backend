@@ -128,7 +128,11 @@ async def poll_ocr_tasks():
                         
                         if status == "success" and zip_url:
                             # 使用共享的服务处理结果
-                            await process_mineru_result(task, zip_url, db)
+                            success = await process_mineru_result(task, zip_url, db)
+                            if not success:
+                                task.ocr_status = "识别失败"
+                                await db.commit()
+                                logger.error(f"[OCR Poll] Task {task.task_id} process_mineru_result failed, marked as 识别失败.")
                         elif status == "failed":
                             task.ocr_status = "识别失败"
                             await db.commit()
@@ -137,6 +141,9 @@ async def poll_ocr_tasks():
                             logger.info(f"[OCR Poll] Task {task.task_id} is still parsing...")
                     except Exception as e:
                         logger.error(f"[OCR Poll] Unexpected error processing task {task.task_id}: {e}")
+                        # 接口异常或任务返回错误时更新 OCR 状态为识别失败，便于重新识别
+                        task.ocr_status = "识别失败"
+                        await db.commit()
         except Exception as e:
             logger.error(f"[OCR Poll] Global error in polling loop: {e}")
             

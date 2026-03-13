@@ -174,6 +174,7 @@ class ChatQueryLogOut(BaseModel):
     llm_response: Optional[str] = None
     llm_messages: Optional[List[dict]] = None  # 包含完整的 Prompt 上下文
     intent_info: Optional[dict] = None  # 意图识别详细信息
+    rag_query_steps: Optional[List[dict]] = None  # RAG 拼接查询过程
     model_name: Optional[str] = None
     query_duration_seconds: Optional[float] = None
 
@@ -319,6 +320,7 @@ class OcrDocumentOut(BaseModel):
     md_file_url: Optional[str] = None
     ocr_status: str
     rag_status: str
+    kb_type: Optional[str] = None
     upload_time: datetime
     ocr_time: Optional[datetime] = None
     submit_time: Optional[datetime] = None
